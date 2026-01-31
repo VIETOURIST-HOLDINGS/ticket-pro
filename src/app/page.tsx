@@ -1299,6 +1299,7 @@ export default function DashboardPage() {
                               aria-label="Select all"
                             />
                           </TableHead>
+                          //show
                         )}
                         {headers.map(header => <TableHead key={header}>{header}</TableHead>)}
                         {headers.length > 0 && (
