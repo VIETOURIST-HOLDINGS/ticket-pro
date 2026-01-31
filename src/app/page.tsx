@@ -86,7 +86,7 @@ export default function DashboardPage() {
   const [scannedRow, setScannedRow] = React.useState<Record<string, any> | null | undefined>(null);
   const [isAlertOpen, setIsAlertOpen] = React.useState(false);
   const [dialogState, setDialogState] = React.useState<DialogState>('not_found');
-  
+
   const [isScanning, setIsScanning] = React.useState(false);
   const [scanError, setScanError] = React.useState<string | null>(null);
   const [isContinuous, setIsContinuous] = React.useState(false);
@@ -121,26 +121,26 @@ export default function DashboardPage() {
     invalidRows: { index: number; reason: string }[];
     validCount: number;
   }>({ invalidRows: [], validCount: 0 });
-  
+
   // Google Sheets integration - single instance
   const googleSheetsApi = useGoogleSheetsApi();
-  
+
   React.useEffect(() => {
     setIsClient(true);
-    
+
     // Load saved QR code column from localStorage
     const savedQrCodeColumn = localStorage.getItem('qrCodeColumn');
     if (savedQrCodeColumn) {
       setQrCodeColumn(savedQrCodeColumn);
     }
-    
+
     // Load saved email column from localStorage
     const savedEmailColumn = localStorage.getItem('emailColumn');
     if (savedEmailColumn) {
       setEmailColumn(savedEmailColumn);
     }
   }, []);
-  
+
   // Safe date formatter to prevent hydration mismatch
   const formatDateSafe = (date: Date | string | null | undefined) => {
     if (!isClient || !date) return 'N/A';
@@ -152,7 +152,7 @@ export default function DashboardPage() {
       return 'N/A';
     }
   };
-  
+
   const checkInForm = useForm<z.infer<typeof checkInSchema>>({
     resolver: zodResolver(checkInSchema),
     defaultValues: {
@@ -160,78 +160,82 @@ export default function DashboardPage() {
     },
   });
 
-  const stopScan = React.useCallback(() => {
-    if (animationFrameIdRef.current) {
+  const stopScan = React.useCallback((force = false) => {
+    // Chỉ dừng camera khi force=true hoặc không phải continuous mode
+    if (force || !isContinuous) {
+      if (animationFrameIdRef.current) {
         cancelAnimationFrame(animationFrameIdRef.current);
         animationFrameIdRef.current = undefined;
+      }
+      setIsScanning(false);
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach((track) => track.stop());
+        videoRef.current.srcObject = null;
+      }
     }
-    setIsScanning(false);
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
-    }
-  }, []);
+  }, [isContinuous]);
 
   const handleCheckIn = React.useCallback((data: z.infer<typeof checkInSchema>) => {
     const { uniqueCode } = data;
     if (!uniqueCode) return;
-    
-    if (scanSourceRef.current === 'camera' && isScanning) {
+
+    // Chỉ dừng camera khi không phải continuous mode
+    if (scanSourceRef.current === 'camera' && isScanning && !isContinuous) {
       stopScan();
     }
-    
+
     let codeToSearch = uniqueCode.trim();
     try {
-        const url = new URL(codeToSearch);
-        const params = url.searchParams;
-        const codeParam = params.get("code") || params.get("id");
-        if (codeParam) {
-            codeToSearch = codeParam.trim();
-        } else {
-            const firstParam = params.values().next().value;
-            if (firstParam) codeToSearch = firstParam.trim();
-        }
-    } catch(e) { /* Not a valid URL, use codeToSearch as is */ }
+      const url = new URL(codeToSearch);
+      const params = url.searchParams;
+      const codeParam = params.get("code") || params.get("id");
+      if (codeParam) {
+        codeToSearch = codeParam.trim();
+      } else {
+        const firstParam = params.values().next().value;
+        if (firstParam) codeToSearch = firstParam.trim();
+      }
+    } catch (e) { /* Not a valid URL, use codeToSearch as is */ }
 
     let foundRowIndex = -1;
-    
+
     for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
-        for (const header of headers) {
-            const cellValue = row[header];
-            if (cellValue === undefined || cellValue === null) continue;
+      const row = rows[i];
+      for (const header of headers) {
+        const cellValue = row[header];
+        if (cellValue === undefined || cellValue === null) continue;
 
-            let cellCode = String(cellValue).trim();
-            try {
-                const url = new URL(cellCode);
-                const params = url.searchParams;
-                const codeParam = params.get("code") || params.get("id");
-                if (codeParam) {
-                    cellCode = codeParam.trim();
-                } else {
-                   const firstParam = params.values().next().value;
-                   if (firstParam) cellCode = firstParam.trim();
-                }
-            } catch (e) { /* not a url */ }
+        let cellCode = String(cellValue).trim();
+        try {
+          const url = new URL(cellCode);
+          const params = url.searchParams;
+          const codeParam = params.get("code") || params.get("id");
+          if (codeParam) {
+            cellCode = codeParam.trim();
+          } else {
+            const firstParam = params.values().next().value;
+            if (firstParam) cellCode = firstParam.trim();
+          }
+        } catch (e) { /* not a url */ }
 
-            if (codeToSearch.toLowerCase() === cellCode.toLowerCase()) {
-                foundRowIndex = i;
-                break;
-            }
+        if (codeToSearch.toLowerCase() === cellCode.toLowerCase()) {
+          foundRowIndex = i;
+          break;
         }
-        if (foundRowIndex !== -1) break;
+      }
+      if (foundRowIndex !== -1) break;
     }
-    
+
     setHighlightedRowIndex(foundRowIndex !== -1 ? foundRowIndex : null);
-    if(foundRowIndex !== -1) {
-        const rowElement = rowRefs.current[foundRowIndex];
-        if (rowElement) {
-            rowElement.scrollIntoView({
-                behavior: 'smooth',
-                block: 'center'
-            });
-        }
+    if (foundRowIndex !== -1) {
+      const rowElement = rowRefs.current[foundRowIndex];
+      if (rowElement) {
+        rowElement.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center'
+        });
+      }
     }
 
     if (foundRowIndex !== -1) {
@@ -249,7 +253,7 @@ export default function DashboardPage() {
         setScannedRow(updatedRow);
         setDialogState('success');
         setIsAlertOpen(true);
-        
+
         // Real-time save to Google Sheets if connected
         console.log('Google Sheets save check:', {
           dataSource,
@@ -257,7 +261,7 @@ export default function DashboardPage() {
           rowNum: foundRowData.__rowNum__,
           shouldSave: dataSource === 'google-sheets' && isGoogleSheetsConnected && foundRowData.__rowNum__
         });
-        
+
         if (dataSource === 'google-sheets' && isGoogleSheetsConnected && foundRowData.__rowNum__) {
           console.log('Saving to Google Sheets, row:', foundRowData.__rowNum__);
           googleSheetsApi.saveCheckIn(foundRowData.__rowNum__, checkInTime).catch(error => {
@@ -271,52 +275,110 @@ export default function DashboardPage() {
       setDialogState('not_found');
       setIsAlertOpen(true);
     }
-  }, [rows, headers, isScanning, stopScan]);
-  
+  }, [rows, headers, isScanning, stopScan, isContinuous]);
+
   const tick = React.useCallback(() => {
     if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA && canvasRef.current) {
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-        if (ctx) {
-            canvas.height = video.videoHeight;
-            canvas.width = video.videoWidth;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsqr(imageData.data, imageData.width, imageData.height);
+      if (ctx) {
+        canvas.height = video.videoHeight;
+        canvas.width = video.videoWidth;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsqr(imageData.data, imageData.width, imageData.height);
 
-            if (code && code.data) {
-              scanSourceRef.current = 'camera';
-              checkInForm.setValue('uniqueCode', code.data);
-              handleCheckIn({ uniqueCode: code.data }); 
-              return;
-            }
+        if (code && code.data) {
+          scanSourceRef.current = 'camera';
+          checkInForm.setValue('uniqueCode', code.data);
+          handleCheckIn({ uniqueCode: code.data });
+          // Trong continuous mode, tiếp tục scan sau khi xử lý QR code
+          if (!isContinuous) {
+            return;
+          }
         }
+      }
     }
     if (animationFrameIdRef.current) {
       animationFrameIdRef.current = requestAnimationFrame(tick);
     }
-  }, [checkInForm, handleCheckIn]); 
+    return;
+  }, [checkInForm, handleCheckIn, isContinuous]);
 
   const startScan = React.useCallback(async () => {
     setScanError(null);
     if (isScanning || animationFrameIdRef.current) return;
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-      if (videoRef.current) {
+      // Kiểm tra xem trình duyệt có hỗ trợ getUserMedia không
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Trình duyệt không hỗ trợ truy cập camera");
+      }
+
+      let stream: MediaStream | null = null;
+
+      // Thử với camera sau trước (cho mobile)
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } }
+        });
+      } catch (err) {
+        console.warn("Không thể mở camera sau, thử camera trước:", err);
+        // Nếu không mở được camera sau, thử camera trước hoặc camera mặc định
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" }
+          });
+        } catch (err2) {
+          console.warn("Không thể mở camera trước, thử camera mặc định:", err2);
+          // Thử không chỉ định facingMode
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true
+          });
+        }
+      }
+
+      if (stream && videoRef.current) {
         videoRef.current.srcObject = stream;
         await new Promise(resolve => videoRef.current!.onloadedmetadata = resolve);
         await videoRef.current.play();
         setIsScanning(true);
         animationFrameIdRef.current = requestAnimationFrame(tick);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Camera access error:", err);
-      setScanError("Camera access denied. Please enable it in your browser settings.");
+      let errorMessage = "Không thể truy cập camera. ";
+
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        errorMessage += "Vui lòng cho phép truy cập camera trong cài đặt trình duyệt.";
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        errorMessage += "Không tìm thấy camera trên thiết bị.";
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        errorMessage += "Camera đang được sử dụng bởi ứng dụng khác.";
+      } else if (err.name === 'OverconstrainedError' || err.name === 'ConstraintNotSatisfiedError') {
+        errorMessage += "Camera không đáp ứng yêu cầu.";
+      } else if (err.name === 'NotSupportedError') {
+        errorMessage += "Trình duyệt không hỗ trợ truy cập camera.";
+      } else if (err.name === 'TypeError') {
+        errorMessage += "Lỗi cấu hình camera.";
+      } else if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+        errorMessage += "Camera yêu cầu HTTPS. Vui lòng truy cập qua HTTPS.";
+      } else {
+        errorMessage += err.message || "Vui lòng thử lại.";
+      }
+
+      setScanError(errorMessage);
       setIsScanning(false);
+
+      toast({
+        variant: "destructive",
+        title: "Lỗi Camera",
+        description: errorMessage,
+      });
     }
-  }, [isScanning, tick]);
+  }, [isScanning, tick, toast]);
 
   const handleLogout = async () => {
     try {
@@ -348,11 +410,11 @@ export default function DashboardPage() {
 
   const handleRowClick = (row: Record<string, any>, event: React.MouseEvent) => {
     // Don't trigger if clicking on checkbox
-    if ((event.target as HTMLElement).closest('button') || 
-        (event.target as HTMLElement).closest('[role="checkbox"]')) {
+    if ((event.target as HTMLElement).closest('button') ||
+      (event.target as HTMLElement).closest('[role="checkbox"]')) {
       return;
     }
-    
+
     if (qrCodeColumn && row[qrCodeColumn]) {
       setQrModalData(String(row[qrCodeColumn]));
       setQrModalRowData(row);
@@ -375,7 +437,7 @@ export default function DashboardPage() {
         if (response.ok) {
           const progress = await response.json();
           setTicketProgress({ current: progress.current, total: progress.total });
-          
+
           if (progress.completed) {
             clearInterval(progressInterval);
           }
@@ -403,13 +465,13 @@ export default function DashboardPage() {
         body: JSON.stringify({ tickets: selectedData, sessionId }),
         signal: controller.signal,
       });
-      
+
       clearTimeout(timeoutId);
 
       if (response.ok) {
         const blob = await response.blob();
         console.log('Received blob size:', blob.size);
-        
+
         if (blob.size > 0) {
           const url = window.URL.createObjectURL(blob);
           const link = document.createElement('a');
@@ -455,17 +517,17 @@ export default function DashboardPage() {
       });
       return;
     }
-    
+
     // Email validation regex
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    
+
     // Check for invalid emails before proceeding
     const invalidRows: { index: number; reason: string }[] = [];
     selectedRows.forEach(index => {
       const row = rows[index];
       const email = row[emailColumn];
       const qrData = row[qrCodeColumn];
-      
+
       if (!email || email.toString().trim() === '') {
         invalidRows.push({ index: index + 1, reason: 'Empty email' });
       } else if (!emailRegex.test(email.toString().trim())) {
@@ -474,10 +536,10 @@ export default function DashboardPage() {
         invalidRows.push({ index: index + 1, reason: 'Empty QR code' });
       }
     });
-    
+
     if (invalidRows.length > 0) {
       const validCount = selectedRows.size - invalidRows.length;
-      
+
       if (validCount === 0) {
         // All rows are invalid
         toast({
@@ -493,20 +555,20 @@ export default function DashboardPage() {
         return;
       }
     }
-    
+
     setIsCheckingEmails(true);
-    
+
     // Check for previously sent emails before opening modal
     if (googleSheetsApi.state.spreadsheetId && activeSheetName) {
       try {
         const emailsToCheck = selectedEmailData.map(e => e.email);
-        
+
         console.log('Checking emails before send:', {
           spreadsheetId: googleSheetsApi.state.spreadsheetId,
           sheetName: activeSheetName,
           emailsToCheck
         });
-        
+
         const response = await fetch('/api/check-sent-emails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -522,7 +584,7 @@ export default function DashboardPage() {
           const data = await response.json();
           console.log('Check sent emails response:', data);
           const previouslySent = data.previouslySentEmails || [];
-          
+
           if (previouslySent.length > 0) {
             // Show confirmation dialog
             setResendConfirmData({
@@ -541,26 +603,26 @@ export default function DashboardPage() {
         // Continue anyway if check fails
       }
     }
-    
+
     setIsCheckingEmails(false);
     setIsEmailModalOpen(true);
   };
-  
+
   const proceedWithEmailCheck = async () => {
     setShowInvalidDataConfirm(false);
     setIsCheckingEmails(true);
-    
+
     // Check for previously sent emails before opening modal
     if (googleSheetsApi.state.spreadsheetId && activeSheetName) {
       try {
         const emailsToCheck = selectedEmailData.map(e => e.email);
-        
+
         console.log('Checking emails before send:', {
           spreadsheetId: googleSheetsApi.state.spreadsheetId,
           sheetName: activeSheetName,
           emailsToCheck
         });
-        
+
         const response = await fetch('/api/check-sent-emails', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -576,7 +638,7 @@ export default function DashboardPage() {
           const data = await response.json();
           console.log('Check sent emails response:', data);
           const previouslySent = data.previouslySentEmails || [];
-          
+
           if (previouslySent.length > 0) {
             // Show confirmation dialog
             setResendConfirmData({
@@ -594,7 +656,7 @@ export default function DashboardPage() {
         console.error('Failed to check previously sent emails:', error);
       }
     }
-    
+
     setIsCheckingEmails(false);
     setIsEmailModalOpen(true);
   };
@@ -602,7 +664,7 @@ export default function DashboardPage() {
   // Prepare email data for selected rows
   const selectedEmailData = React.useMemo(() => {
     if (!emailColumn || !qrCodeColumn) return [];
-    
+
     return Array.from(selectedRows).map(index => {
       const row = rows[index];
       return {
@@ -619,28 +681,28 @@ export default function DashboardPage() {
   const handleAlertClose = React.useCallback(() => {
     setIsAlertOpen(false);
     checkInForm.reset();
-    
-    if (isContinuous && scanSourceRef.current === 'camera') {
-      setTimeout(() => startScan(), 100); 
-    } else if (isContinuous && scanSourceRef.current === 'form') {
+
+    // Trong continuous mode, camera vẫn đang chạy nên không cần khởi động lại
+    // Chỉ cần focus vào input nếu đang dùng form
+    if (isContinuous && scanSourceRef.current === 'form') {
       inputRef.current?.focus();
     }
-  }, [isContinuous, checkInForm, startScan]);
+  }, [isContinuous, checkInForm]);
 
 
   React.useEffect(() => {
     return () => {
-      stopScan();
+      stopScan(true); // Force stop khi component unmount
     };
   }, [stopScan]);
 
   React.useEffect(() => {
-      if (isContinuous && dialogState === 'success' && isAlertOpen) {
-          const timer = setTimeout(() => {
-              handleAlertClose();
-          }, 1500); 
-          return () => clearTimeout(timer);
-      }
+    if (isContinuous && dialogState === 'success' && isAlertOpen) {
+      const timer = setTimeout(() => {
+        handleAlertClose();
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
   }, [isAlertOpen, dialogState, isContinuous, handleAlertClose]);
 
   const processSheetData = (wb: WorkBook, sheetName: string) => {
@@ -649,22 +711,22 @@ export default function DashboardPage() {
       setHighlightedRowIndex(null);
 
       if (!wb || !wb.Sheets) {
-          toast({
-              variant: "destructive",
-              title: "Workbook Error",
-              description: "The workbook is invalid or corrupted."
-          });
-          return;
+        toast({
+          variant: "destructive",
+          title: "Workbook Error",
+          description: "The workbook is invalid or corrupted."
+        });
+        return;
       }
 
       const worksheet = wb.Sheets[sheetName];
       if (!worksheet) {
-          toast({
-              variant: "destructive",
-              title: "Sheet not found",
-              description: `Sheet with name "${sheetName}" could not be found in the file.`
-          });
-          return;
+        toast({
+          variant: "destructive",
+          title: "Sheet not found",
+          description: `Sheet with name "${sheetName}" could not be found in the file.`
+        });
+        return;
       }
 
       const jsonData = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, {
@@ -673,70 +735,70 @@ export default function DashboardPage() {
 
       if (jsonData.length < 1) {
         toast({
-            variant: "destructive",
-            title: "No Data",
-            description: "The selected sheet is empty or could not be read."
+          variant: "destructive",
+          title: "No Data",
+          description: "The selected sheet is empty or could not be read."
         });
         setHeaders([]);
         setRows([]);
         return;
       }
-    
-    const headerSet = new Set<string>();
-    jsonData.forEach(row => {
+
+      const headerSet = new Set<string>();
+      jsonData.forEach(row => {
         if (row && typeof row === 'object' && !Array.isArray(row)) {
-            try {
-                Object.keys(row).forEach(key => {
-                    if (key && typeof key === 'string') {
-                        headerSet.add(key);
-                    }
-                });
-            } catch (error) {
-                console.warn('Error processing row headers:', error);
-            }
+          try {
+            Object.keys(row).forEach(key => {
+              if (key && typeof key === 'string') {
+                headerSet.add(key);
+              }
+            });
+          } catch (error) {
+            console.warn('Error processing row headers:', error);
+          }
         }
-    });
-    const extractedHeaders = Array.from(headerSet);
+      });
+      const extractedHeaders = Array.from(headerSet);
 
-    const processedRows = jsonData.map((row, index) => {
+      const processedRows = jsonData.map((row, index) => {
         try {
-            if (row && typeof row === 'object' && !Array.isArray(row)) {
-                return {
-                    ...row,
-                    __rowNum__: index + 2, // Assuming header is row 1, data starts at row 2
-                    checkedInTime: null,
-                };
-            } else {
-                console.warn(`Row ${index + 2} is not a valid object:`, row);
-                return {
-                    __rowNum__: index + 2,
-                    checkedInTime: null,
-                };
-            }
-        } catch (error) {
-            console.warn(`Error processing row ${index + 2}:`, error);
+          if (row && typeof row === 'object' && !Array.isArray(row)) {
             return {
-                __rowNum__: index + 2,
-                checkedInTime: null,
+              ...row,
+              __rowNum__: index + 2, // Assuming header is row 1, data starts at row 2
+              checkedInTime: null,
             };
+          } else {
+            console.warn(`Row ${index + 2} is not a valid object:`, row);
+            return {
+              __rowNum__: index + 2,
+              checkedInTime: null,
+            };
+          }
+        } catch (error) {
+          console.warn(`Error processing row ${index + 2}:`, error);
+          return {
+            __rowNum__: index + 2,
+            checkedInTime: null,
+          };
         }
-    });
+      });
 
-    setHeaders(extractedHeaders);
-    setRows(processedRows);
-    setActiveSheetName(sheetName);
-    setScannedRow(null);
+      setHeaders(extractedHeaders);
+      setRows(processedRows);
+      setActiveSheetName(sheetName);
+      setScannedRow(null);
 
-    toast({
-      title: "Success!",
-      description: `Successfully imported ${processedRows.length} rows and ${extractedHeaders.length} columns from sheet: ${sheetName}.`,
-    });
+      toast({
+        title: "Success!",
+        description: `Successfully imported ${processedRows.length} rows and ${extractedHeaders.length} columns from sheet: ${sheetName}.`,
+      });
     } catch (error) {
       console.error('Error processing sheet data:', error);
       toast({
-          variant: "destructive",
-          title: "Processing Error",
-          description: "There was an error processing the sheet data. Please check the file format."
+        variant: "destructive",
+        title: "Processing Error",
+        description: "There was an error processing the sheet data. Please check the file format."
       });
       setHeaders([]);
       setRows([]);
@@ -752,17 +814,17 @@ export default function DashboardPage() {
     reader.onload = async (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        
+
         // Save raw file data for pristine re-reads during export
         setOriginalFileData(data);
 
         // Create universal handler and process file
         const handler = new UniversalExcelHandler();
         const result = await handler.readFile(data);
-        
+
         console.log(`Using library: ${result.library}`);
         console.log(`Advanced formatting detected: ${result.hasFormatting}`);
-        
+
         setExcelHandler(handler);
         setSheetNames(result.sheets);
         setActiveSheetName(null);
@@ -774,28 +836,29 @@ export default function DashboardPage() {
 
 
         if (result.sheets.length === 0) {
-            toast({
-                variant: "destructive",
-                title: "No Sheets Found",
-                description: "The uploaded Excel file does not contain any sheets.",
-            });
-            return;
+          toast({
+            variant: "destructive",
+            title: "No Sheets Found",
+            description: "The uploaded Excel file does not contain any sheets.",
+          });
+          return;
         }
 
         if (result.sheets.length === 1) {
-            const sheetData = handler.processSheetData(result.sheets[0]);
-            setHeaders(sheetData.headers);
-            setRows(sheetData.rows);
-            setActiveSheetName(result.sheets[0]);
-            
-            toast({
-              title: "Success!",
-              description: `File loaded with ${result.library}. Advanced formatting: ${result.hasFormatting ? 'Detected' : 'Basic'}`,
-            });
+          const sheetData = handler.processSheetData(result.sheets[0]);
+          setHeaders(sheetData.headers);
+          setRows(sheetData.rows);
+          console.log("fsadsd", sheetData.rows);
+          setActiveSheetName(result.sheets[0]);
+
+          toast({
+            title: "Success!",
+            description: `File loaded with ${result.library}. Advanced formatting: ${result.hasFormatting ? 'Detected' : 'Basic'}`,
+          });
         } else {
-            setIsSheetSelectorOpen(true);
+          setIsSheetSelectorOpen(true);
         }
-        
+
       } catch (error) {
         console.error("Error processing Excel file:", error);
         toast({
@@ -806,43 +869,43 @@ export default function DashboardPage() {
       }
     };
     reader.onerror = () => {
-        toast({
-            variant: "destructive",
-            title: "File Read Error",
-            description: "There was an error reading the file."
-        });
+      toast({
+        variant: "destructive",
+        title: "File Read Error",
+        description: "There was an error reading the file."
+      });
     }
     reader.readAsArrayBuffer(file);
     event.target.value = '';
   };
-  
+
   const handleSheetSelect = (sheetName: string) => {
     if (sheetName && excelHandler) {
-        const sheetData = excelHandler.processSheetData(sheetName);
-        setHeaders(sheetData.headers);
-        setRows(sheetData.rows);
-        setActiveSheetName(sheetName);
-        
-        // Restore saved QR code column if it exists in headers
-        const savedQrCodeColumn = localStorage.getItem('qrCodeColumn');
-        if (savedQrCodeColumn && sheetData.headers?.includes(savedQrCodeColumn)) {
-          setQrCodeColumn(savedQrCodeColumn);
-        } else {
-          setQrCodeColumn(''); // Reset QR code column if saved column doesn't exist
-        }
-        
-        // Restore saved email column if it exists in headers
-        const savedEmailColumn = localStorage.getItem('emailColumn');
-        if (savedEmailColumn && sheetData.headers?.includes(savedEmailColumn)) {
-          setEmailColumn(savedEmailColumn);
-        } else {
-          setEmailColumn(''); // Reset email column if saved column doesn't exist
-        }
-        
-        toast({
-          title: "Success!",
-          description: `Successfully imported ${sheetData.rows.length} rows from sheet: ${sheetName}.`,
-        });
+      const sheetData = excelHandler.processSheetData(sheetName);
+      setHeaders(sheetData.headers);
+      setRows(sheetData.rows);
+      setActiveSheetName(sheetName);
+
+      // Restore saved QR code column if it exists in headers
+      const savedQrCodeColumn = localStorage.getItem('qrCodeColumn');
+      if (savedQrCodeColumn && sheetData.headers?.includes(savedQrCodeColumn)) {
+        setQrCodeColumn(savedQrCodeColumn);
+      } else {
+        setQrCodeColumn(''); // Reset QR code column if saved column doesn't exist
+      }
+
+      // Restore saved email column if it exists in headers
+      const savedEmailColumn = localStorage.getItem('emailColumn');
+      if (savedEmailColumn && sheetData.headers?.includes(savedEmailColumn)) {
+        setEmailColumn(savedEmailColumn);
+      } else {
+        setEmailColumn(''); // Reset email column if saved column doesn't exist
+      }
+
+      toast({
+        title: "Success!",
+        description: `Successfully imported ${sheetData.rows.length} rows from sheet: ${sheetName}.`,
+      });
     }
     setIsSheetSelectorOpen(false);
   };
@@ -862,9 +925,9 @@ export default function DashboardPage() {
     setActiveSheetName(data.sheetName);
     setScannedRow(null);
     setHighlightedRowIndex(null);
-    
+
     setSelectedRows(new Set());
-    
+
     // Restore saved QR code column if it exists in headers
     const savedQrCodeColumn = localStorage.getItem('qrCodeColumn');
     if (savedQrCodeColumn && data.headers?.includes(savedQrCodeColumn)) {
@@ -872,7 +935,7 @@ export default function DashboardPage() {
     } else {
       setQrCodeColumn(''); // Reset QR code column if saved column doesn't exist
     }
-    
+
     // Restore saved email column if it exists in headers
     const savedEmailColumn = localStorage.getItem('emailColumn');
     if (savedEmailColumn && data.headers?.includes(savedEmailColumn)) {
@@ -881,7 +944,7 @@ export default function DashboardPage() {
       setEmailColumn(''); // Reset email column if saved column doesn't exist
     }
     rowRefs.current = [];
-    
+
     toast({
       title: "Google Sheets Connected!",
       description: `Successfully loaded ${data.rows.length} attendees from Google Sheets.`,
@@ -908,7 +971,7 @@ export default function DashboardPage() {
       });
       return;
     }
-    
+
     if (!excelHandler || !activeSheetName) {
       toast({
         variant: "destructive",
@@ -920,16 +983,16 @@ export default function DashboardPage() {
 
     try {
       console.log('Starting export with enhanced formatting preservation...');
-      
+
       // Export with automatic formatting preservation
       const exportBuffer = await excelHandler.exportWithCheckIns(
         activeSheetName,
         rows
       );
-      
+
       // Create and download
-      const blob = new Blob([exportBuffer], { 
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+      const blob = new Blob([exportBuffer], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
 
       const link = document.createElement('a');
@@ -946,7 +1009,7 @@ export default function DashboardPage() {
         title: "Export Successful! ✨",
         description: "The updated attendee report has been downloaded with enhanced formatting preservation.",
       });
-      
+
     } catch (error) {
       console.error("Error exporting Excel file:", error);
       toast({
@@ -962,25 +1025,25 @@ export default function DashboardPage() {
     <div className="flex min-h-screen w-full flex-col bg-muted/40" suppressHydrationWarning>
       <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b bg-background px-4 sm:static sm:h-auto sm:border-0 sm:bg-transparent sm:px-6">
         <div className="flex items-center gap-2">
-            <TicketCheck className="h-6 w-6 text-primary" />
-            <h1 className="text-xl font-bold">TicketCheck Pro</h1>
+          <TicketCheck className="h-6 w-6 text-primary" />
+          <h1 className="text-xl font-bold">TicketCheck Pro</h1>
         </div>
         <div className="ml-auto flex items-center gap-4">
-            {dataSource === 'google-sheets' ? (
-              <div className="flex items-center gap-2 text-sm text-green-600">
-                <CheckCircle className="h-4 w-4" />
-                Auto-saving to Google Sheets
-              </div>
-            ) : (
-              <Button onClick={handleExport} variant="outline" size="sm" disabled={rows.length === 0}>
-                  <Download className="mr-2 h-4 w-4"/>
-                  Export Report
-              </Button>
-            )}
-            <Button onClick={handleLogout} variant="outline" size="sm">
-              <LogOut className="mr-2 h-4 w-4" />
-              Logout
+          {dataSource === 'google-sheets' ? (
+            <div className="flex items-center gap-2 text-sm text-green-600">
+              <CheckCircle className="h-4 w-4" />
+              Auto-saving to Google Sheets
+            </div>
+          ) : (
+            <Button onClick={handleExport} variant="outline" size="sm" disabled={rows.length === 0}>
+              <Download className="mr-2 h-4 w-4" />
+              Export Report
             </Button>
+          )}
+          <Button onClick={handleLogout} variant="outline" size="sm">
+            <LogOut className="mr-2 h-4 w-4" />
+            Logout
+          </Button>
         </div>
       </header>
       <main className="flex-1 p-4 sm:px-6 sm:py-0">
@@ -991,34 +1054,34 @@ export default function DashboardPage() {
                 <CardHeader>
                   <CardTitle>Upload Attendee List</CardTitle>
                   <CardDescription>
-                      Select an Excel file. If it has multiple sheets, you will be prompted to choose one.
-                      <br />
-                      <small className="text-muted-foreground">✓ All original formatting will be preserved when downloading the updated report.</small>
+                    Select an Excel file. If it has multiple sheets, you will be prompted to choose one.
+                    <br />
+                    <small className="text-muted-foreground">✓ All original formatting will be preserved when downloading the updated report.</small>
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <input
-                      type="file"
-                      ref={fileInputRef}
-                      onChange={handleFileChange}
-                      className="hidden"
-                      accept=".xlsx,.xls,.xlsm,.xlsb"
-                      title="Upload Excel file (.xlsx, .xls, .xlsm, .xlsb)"
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileChange}
+                    className="hidden"
+                    accept=".xlsx,.xls,.xlsm,.xlsb"
+                    title="Upload Excel file (.xlsx, .xls, .xlsm, .xlsb)"
                   />
                   <Button onClick={() => fileInputRef.current?.click()} className="w-full">
-                      <Upload className="mr-2 h-4 w-4" />
-                      Upload Excel File
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload Excel File
                   </Button>
                 </CardContent>
               </Card>
             )}
-            
-            <GoogleSheetsConnector 
+
+            <GoogleSheetsConnector
               onDataLoaded={handleGoogleSheetsDataLoaded}
               onConnectionChange={handleGoogleSheetsConnectionChange}
               googleSheetsApi={googleSheetsApi}
             />
-            
+
             <Card>
               <CardHeader>
                 <CardTitle>Check In Attendee</CardTitle>
@@ -1026,83 +1089,83 @@ export default function DashboardPage() {
               </CardHeader>
               <CardContent>
                 <div className="relative mb-4 flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg border-2 border-dashed bg-muted">
-                    <video ref={videoRef} className="absolute inset-0 h-full w-full object-cover" autoPlay playsInline muted />
-                    
-                    {isScanning ? (
-                        <>
-                            <div 
-                                className="absolute inset-0 z-10" 
-                                style={{ boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.4)' }}
-                            >
-                                <div className="pointer-events-none absolute top-1/2 left-1/2 h-3/4 w-3/4 max-w-[400px] max-h-[400px] -translate-x-1/2 -translate-y-1/2 rounded-lg" />
-                            </div>
+                  <video ref={videoRef} className="absolute inset-0 h-full w-full object-cover" autoPlay playsInline muted />
 
-                            <div className="pointer-events-none relative z-20 h-3/4 w-3/4 max-w-[400px] max-h-[400px]">
-                                <div className="absolute -top-1 -left-1 h-10 w-10 border-t-4 border-l-4 border-primary rounded-tl-lg"></div>
-                                <div className="absolute -top-1 -right-1 h-10 w-10 border-t-4 border-r-4 border-primary rounded-tr-lg"></div>
-                                <div className="absolute -bottom-1 -left-1 h-10 w-10 border-b-4 border-l-4 border-primary rounded-bl-lg"></div>
-                                <div className="absolute -bottom-1 -right-1 h-10 w-10 border-b-4 border-r-4 border-primary rounded-br-lg"></div>
-                            </div>
-                        </>
-                    ) : (
-                        <div className="absolute inset-0 flex items-center justify-center bg-muted">
-                            <QrCode className="h-16 w-16 text-muted-foreground/50"/>
-                        </div>
-                    )}
-                    <canvas ref={canvasRef} className="hidden" />
+                  {isScanning ? (
+                    <>
+                      <div
+                        className="absolute inset-0 z-10"
+                        style={{ boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.4)' }}
+                      >
+                        <div className="pointer-events-none absolute top-1/2 left-1/2 h-3/4 w-3/4 max-w-[400px] max-h-[400px] -translate-x-1/2 -translate-y-1/2 rounded-lg" />
+                      </div>
+
+                      <div className="pointer-events-none relative z-20 h-3/4 w-3/4 max-w-[400px] max-h-[400px]">
+                        <div className="absolute -top-1 -left-1 h-10 w-10 border-t-4 border-l-4 border-primary rounded-tl-lg"></div>
+                        <div className="absolute -top-1 -right-1 h-10 w-10 border-t-4 border-r-4 border-primary rounded-tr-lg"></div>
+                        <div className="absolute -bottom-1 -left-1 h-10 w-10 border-b-4 border-l-4 border-primary rounded-bl-lg"></div>
+                        <div className="absolute -bottom-1 -right-1 h-10 w-10 border-b-4 border-r-4 border-primary rounded-br-lg"></div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center bg-muted">
+                      <QrCode className="h-16 w-16 text-muted-foreground/50" />
+                    </div>
+                  )}
+                  <canvas ref={canvasRef} className="hidden" />
                 </div>
                 {scanError && (
-                    <Alert variant="destructive" className="mb-4">
-                        <AlertTriangle className="h-4 w-4" />
-                        <AlertTitle>Camera Error</AlertTitle>
-                        <AlertDescriptionUI>{scanError}</AlertDescriptionUI>
-                    </Alert>
+                  <Alert variant="destructive" className="mb-4">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Camera Error</AlertTitle>
+                    <AlertDescriptionUI>{scanError}</AlertDescriptionUI>
+                  </Alert>
                 )}
                 <div className="flex items-center space-x-2 mb-4">
-                    <Checkbox id="continuous-scan" checked={isContinuous} onCheckedChange={(checked) => setIsContinuous(!!checked)} />
-                    <Label htmlFor="continuous-scan" className="cursor-pointer">Continuous Scan</Label>
+                  <Checkbox id="continuous-scan" checked={isContinuous} onCheckedChange={(checked) => setIsContinuous(!!checked)} />
+                  <Label htmlFor="continuous-scan" className="cursor-pointer">Continuous Scan</Label>
                 </div>
                 <Button type="button" onClick={handleScanButtonClick} className="w-full mb-4" variant="outline" disabled={rows.length === 0}>
-                    <Camera className="mr-2 h-4 w-4" />
-                    {isScanning ? 'Stop Camera' : 'Scan QR Code'}
+                  <Camera className="mr-2 h-4 w-4" />
+                  {isScanning ? 'Stop Camera' : 'Scan QR Code'}
                 </Button>
                 <Form {...checkInForm}>
-                    <form 
-                        onSubmit={(e) => {
-                            e.preventDefault();
-                            scanSourceRef.current = 'form';
-                            checkInForm.handleSubmit(handleCheckIn)(e);
-                        }} 
-                        className="space-y-4"
-                    >
-                        <FormField
-                            control={checkInForm.control}
-                            name="uniqueCode"
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormLabel>Unique Code</FormLabel>
-                                    <FormControl>
-                                        <Input 
-                                            ref={(e) => {
-                                                field.ref(e);
-                                                (inputRef as React.MutableRefObject<HTMLInputElement | null>).current = e;
-                                            }}
-                                            placeholder="Paste or type code here..." 
-                                            value={field.value}
-                                            onChange={field.onChange}
-                                            onBlur={field.onBlur}
-                                            name={field.name}
-                                            disabled={rows.length === 0} 
-                                        />
-                                    </FormControl>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                        <Button type="submit" className="w-full bg-accent hover:bg-accent/90" disabled={rows.length === 0}>
-                           <TicketCheck className="mr-2 h-4 w-4"/> Check In
-                        </Button>
-                    </form>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      scanSourceRef.current = 'form';
+                      checkInForm.handleSubmit(handleCheckIn)(e);
+                    }}
+                    className="space-y-4"
+                  >
+                    <FormField
+                      control={checkInForm.control}
+                      name="uniqueCode"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Unique Code</FormLabel>
+                          <FormControl>
+                            <Input
+                              ref={(e) => {
+                                field.ref(e);
+                                (inputRef as React.MutableRefObject<HTMLInputElement | null>).current = e;
+                              }}
+                              placeholder="Paste or type code here..."
+                              value={field.value}
+                              onChange={field.onChange}
+                              onBlur={field.onBlur}
+                              name={field.name}
+                              disabled={rows.length === 0}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <Button type="submit" className="w-full bg-accent hover:bg-accent/90" disabled={rows.length === 0}>
+                      <TicketCheck className="mr-2 h-4 w-4" /> Check In
+                    </Button>
+                  </form>
                 </Form>
               </CardContent>
             </Card>
@@ -1110,188 +1173,187 @@ export default function DashboardPage() {
           <div className="lg:col-span-1 xl:col-span-2">
             <Card>
               <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle>Attendee List</CardTitle>
-                      <CardDescription>A list of all imported attendees and their check-in status.</CardDescription>
-                    </div>
-                    {headers.length > 0 && (
-                      <div className="flex flex-col gap-3">
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-2">
-                            <Label htmlFor="qr-column" className="text-sm">QR Code Column:</Label>
-                            <Select value={qrCodeColumn || "__none__"} onValueChange={(value) => {
-                              const newValue = value === "__none__" ? "" : value;
-                              setQrCodeColumn(newValue);
-                              if (newValue) {
-                                localStorage.setItem('qrCodeColumn', newValue);
-                              } else {
-                                localStorage.removeItem('qrCodeColumn');
-                              }
-                            }}>
-                              <SelectTrigger id="qr-column" className="w-[200px]">
-                                <SelectValue placeholder="Select column" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="__none__">None</SelectItem>
-                                {headers.map((header) => (
-                                  <SelectItem key={header} value={header}>
-                                    {header}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          
-                          <div className="flex items-center gap-2">
-                            <Label htmlFor="email-column" className="text-sm">Email Column:</Label>
-                            <Select value={emailColumn || "__none__"} onValueChange={(value) => {
-                              const newValue = value === "__none__" ? "" : value;
-                              setEmailColumn(newValue);
-                              if (newValue) {
-                                localStorage.setItem('emailColumn', newValue);
-                              } else {
-                                localStorage.removeItem('emailColumn');
-                              }
-                            }}>
-                              <SelectTrigger id="email-column" className="w-[200px]">
-                                <SelectValue placeholder="Select column" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="__none__">None</SelectItem>
-                                {headers.map((header) => (
-                                  <SelectItem key={header} value={header}>
-                                    {header}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                        
-                        {selectedRows.size > 0 && (
-                          <div className="flex gap-2 flex-wrap">
-                            {qrCodeColumn && (
-                              <div className="flex flex-col gap-2">
-                                <Button
-                                  onClick={handleDownloadSelectedTickets}
-                                  variant="outline"
-                                  disabled={isGeneratingTickets}
-                                >
-                                  <Archive className="mr-2 h-4 w-4" />
-                                  {isGeneratingTickets 
-                                    ? `Generating... (${ticketProgress.current}/${ticketProgress.total})`
-                                    : `Download Selected Tickets (${selectedRows.size})`
-                                  }
-                                </Button>
-                                {isGeneratingTickets && (
-                                  <div className="w-[250px]">
-                                    <Progress 
-                                      value={ticketProgress.total > 0 ? (ticketProgress.current / ticketProgress.total) * 100 : 0} 
-                                      className="h-2"
-                                    />
-                                    <div className="text-xs text-muted-foreground mt-1 text-center">
-                                      {ticketProgress.current} / {ticketProgress.total} tickets processed
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                            
-                            {emailColumn && qrCodeColumn && (
-                              <Button
-                                onClick={handleSendEmails}
-                                variant="outline"
-                                disabled={isGeneratingTickets || isCheckingEmails || isEmailModalOpen}
-                              >
-                                {isCheckingEmails ? (
-                                  <>
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    Checking...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Mail className="mr-2 h-4 w-4" />
-                                    Send Emails ({selectedRows.size})
-                                  </>
-                                )}
-                              </Button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Attendee List</CardTitle>
+                    <CardDescription>A list of all imported attendees and their check-in status.</CardDescription>
                   </div>
+                  {headers.length > 0 && (
+                    <div className="flex flex-col gap-3">
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="qr-column" className="text-sm">QR Code Column:</Label>
+                          <Select value={qrCodeColumn || "__none__"} onValueChange={(value) => {
+                            const newValue = value === "__none__" ? "" : value;
+                            setQrCodeColumn(newValue);
+                            if (newValue) {
+                              localStorage.setItem('qrCodeColumn', newValue);
+                            } else {
+                              localStorage.removeItem('qrCodeColumn');
+                            }
+                          }}>
+                            <SelectTrigger id="qr-column" className="w-[200px]">
+                              <SelectValue placeholder="Select column" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">None</SelectItem>
+                              {headers.map((header) => (
+                                <SelectItem key={header} value={header}>
+                                  {header}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="email-column" className="text-sm">Email Column:</Label>
+                          <Select value={emailColumn || "__none__"} onValueChange={(value) => {
+                            const newValue = value === "__none__" ? "" : value;
+                            setEmailColumn(newValue);
+                            if (newValue) {
+                              localStorage.setItem('emailColumn', newValue);
+                            } else {
+                              localStorage.removeItem('emailColumn');
+                            }
+                          }}>
+                            <SelectTrigger id="email-column" className="w-[200px]">
+                              <SelectValue placeholder="Select column" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">None</SelectItem>
+                              {headers.map((header) => (
+                                <SelectItem key={header} value={header}>
+                                  {header}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      {selectedRows.size > 0 && (
+                        <div className="flex gap-2 flex-wrap">
+                          {qrCodeColumn && (
+                            <div className="flex flex-col gap-2">
+                              <Button
+                                onClick={handleDownloadSelectedTickets}
+                                variant="outline"
+                                disabled={isGeneratingTickets}
+                              >
+                                <Archive className="mr-2 h-4 w-4" />
+                                {isGeneratingTickets
+                                  ? `Generating... (${ticketProgress.current}/${ticketProgress.total})`
+                                  : `Download Selected Tickets (${selectedRows.size})`
+                                }
+                              </Button>
+                              {isGeneratingTickets && (
+                                <div className="w-[250px]">
+                                  <Progress
+                                    value={ticketProgress.total > 0 ? (ticketProgress.current / ticketProgress.total) * 100 : 0}
+                                    className="h-2"
+                                  />
+                                  <div className="text-xs text-muted-foreground mt-1 text-center">
+                                    {ticketProgress.current} / {ticketProgress.total} tickets processed
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {emailColumn && qrCodeColumn && (
+                            <Button
+                              onClick={handleSendEmails}
+                              variant="outline"
+                              disabled={isGeneratingTickets || isCheckingEmails || isEmailModalOpen}
+                            >
+                              {isCheckingEmails ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Checking...
+                                </>
+                              ) : (
+                                <>
+                                  <Mail className="mr-2 h-4 w-4" />
+                                  Send Emails ({selectedRows.size})
+                                </>
+                              )}
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="max-h-[600px] overflow-auto">
-                    <Table>
-                        <TableHeader>
-                            <TableRow>
-                                {headers.length > 0 && (
-                                    <TableHead className="w-[50px] text-center">
-                                        <Checkbox 
-                                            checked={selectedRows.size === rows.length && rows.length > 0}
-                                            onCheckedChange={handleSelectAll}
-                                            aria-label="Select all"
-                                        />
-                                    </TableHead>
-                                )}
-                                {headers.map(header => <TableHead key={header}>{header}</TableHead>)}
-                                {headers.length > 0 && (
-                                    <>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead>Checked In At</TableHead>
-                                    </>
-                                )}
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {rows.length > 0 ? (
-                                rows.map((row, rowIndex) => (
-                                    <TableRow 
-                                      key={rowIndex}
-                                      ref={(el) => {
-                                          if (el) rowRefs.current[rowIndex] = el;
-                                      }}
-                                      className={cn(
-                                        highlightedRowIndex === rowIndex && 'bg-primary/10',
-                                        selectedRows.has(rowIndex) && 'bg-muted/50',
-                                        qrCodeColumn && 'cursor-pointer hover:bg-muted/30'
-                                      )}
-                                      onClick={(e) => handleRowClick(row, e)}
-                                    >
-                                        <TableCell className="text-center">
-                                            <Checkbox 
-                                                checked={selectedRows.has(rowIndex)}
-                                                onCheckedChange={(checked) => handleSelectRow(rowIndex, !!checked)}
-                                                aria-label={`Select row ${rowIndex + 1}`}
-                                            />
-                                        </TableCell>
-                                        {headers.map(header => (
-                                            <TableCell key={header}>
-                                                {String(row[header] ?? '')}
-                                            </TableCell>
-                                        ))}
-                                        <TableCell>
-                                            <Badge variant={row.checkedInTime ? "default" : "secondary"} className={row.checkedInTime ? "bg-accent text-accent-foreground" : ""}>
-                                                {row.checkedInTime ? "Checked In" : "Pending"}
-                                            </Badge>
-                                        </TableCell>
-                                        <TableCell suppressHydrationWarning>
-                                            {formatDateSafe(row.checkedInTime)}
-                                        </TableCell>
-                                    </TableRow>
-                                ))
-                            ) : (
-                                <TableRow>
-                                    <TableCell colSpan={headers.length > 0 ? headers.length + 3 : 1} className="h-24 text-center">
-                                        No data loaded. Please upload an Excel file.
-                                    </TableCell>
-                                </TableRow>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        {headers.length > 0 && (
+                          <TableHead className="w-[50px] text-center">
+                            <Checkbox
+                              checked={selectedRows.size === rows.length && rows.length > 0}
+                              onCheckedChange={handleSelectAll}
+                              aria-label="Select all"
+                            />
+                          </TableHead>
+                        )}
+                        {headers.map(header => <TableHead key={header}>{header}</TableHead>)}
+                        {headers.length > 0 && (
+                          <>
+                            <TableHead>Status</TableHead>
+                          </>
+                        )}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rows.length > 0 ? (
+                        rows.map((row, rowIndex) => (
+                          <TableRow
+                            key={rowIndex}
+                            ref={(el) => {
+                              if (el) rowRefs.current[rowIndex] = el;
+                            }}
+                            className={cn(
+                              highlightedRowIndex === rowIndex && 'bg-primary/10',
+                              selectedRows.has(rowIndex) && 'bg-muted/50',
+                              qrCodeColumn && 'cursor-pointer hover:bg-muted/30'
                             )}
-                        </TableBody>
-                    </Table>
+                            onClick={(e) => handleRowClick(row, e)}
+                          >
+                            <TableCell className="text-center">
+                              <Checkbox
+                                checked={selectedRows.has(rowIndex)}
+                                onCheckedChange={(checked) => handleSelectRow(rowIndex, !!checked)}
+                                aria-label={`Select row ${rowIndex + 1}`}
+                              />
+                            </TableCell>
+                            {headers.map(header => (
+                              <TableCell key={header}>
+                                {String(row[header] ?? '')}
+                              </TableCell>
+                            ))}
+                            <TableCell>
+                              <Badge variant={row.checkedInTime ? "default" : "secondary"} className={row.checkedInTime ? "bg-accent text-accent-foreground" : ""}>
+                                {row.checkedInTime ? "Checked In" : "Pending"}
+                              </Badge>
+                            </TableCell>
+                            {/* <TableCell suppressHydrationWarning>
+                              {formatDateSafe(row.checkedInTime)}
+                            </TableCell> */}
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={headers.length > 0 ? headers.length + 3 : 1} className="h-24 text-center">
+                            No data loaded. Please upload an Excel file.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
                 </div>
               </CardContent>
             </Card>
@@ -1301,24 +1363,24 @@ export default function DashboardPage() {
 
       <Dialog open={isSheetSelectorOpen} onOpenChange={setIsSheetSelectorOpen}>
         <DialogContent>
-            <DialogHeader>
+          <DialogHeader>
             <DialogTitle>Select a Sheet</DialogTitle>
             <DialogDescription>
-                Your Excel file contains multiple sheets. Please select the one you'd like to import.
+              Your Excel file contains multiple sheets. Please select the one you'd like to import.
             </DialogDescription>
-            </DialogHeader>
-            <div className="flex flex-col space-y-2">
+          </DialogHeader>
+          <div className="flex flex-col space-y-2">
             {sheetNames.map(name => (
-                <Button
+              <Button
                 key={name}
                 variant="outline"
                 onClick={() => handleSheetSelect(name)}
-                >
+              >
                 <FileSpreadsheet className="mr-2 h-4 w-4" />
                 {name}
-                </Button>
+              </Button>
             ))}
-            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -1337,12 +1399,12 @@ export default function DashboardPage() {
                   Check-in Successful!
                 </AlertDialogTitle>
                 <AlertDialogDescription className="text-accent-foreground/90">
-                    Welcome! Details for the attendee are below.
+                  Welcome! Details for the attendee are below.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <div className="text-sm space-y-1 max-h-60 overflow-auto">
                 {headers.map((header) => (
-                    <p key={header}><strong>{header}:</strong> {String(scannedRow[header] ?? '')}</p>
+                  <p key={header}><strong>{header}:</strong> {String(scannedRow[header] ?? '')}</p>
                 ))}
                 <p>
                   <strong>Checked-in:</strong>{" "}
@@ -1365,24 +1427,24 @@ export default function DashboardPage() {
               <div className="text-sm space-y-2 max-h-60 overflow-auto rounded-md border bg-muted p-4">
                 <p className="font-bold text-lg mb-2">Original Check-in Details:</p>
                 {headers.map((header) => (
-                    <p key={header}><strong>{header}:</strong> {String(scannedRow[header] ?? '')}</p>
+                  <p key={header}><strong>{header}:</strong> {String(scannedRow[header] ?? '')}</p>
                 ))}
-                <p className="mt-2">
+                {/* <p className="mt-2">
                   <strong>Initial Check-in Time:</strong>{" "}
                   <span suppressHydrationWarning>{formatDateSafe(scannedRow.checkedInTime)}</span>
-                </p>
+                </p> */}
               </div>
             </>
           )}
           {dialogState === 'not_found' && (
             <AlertDialogHeader className="bg-yellow-400 text-yellow-900 p-4 -mx-6 -mt-6 sm:rounded-t-lg">
-                <AlertDialogTitle className="flex items-center gap-2">
-                    <AlertTriangle className="h-6 w-6" />
-                    Ticket Not Found
-                </AlertDialogTitle>
-                <AlertDialogDescription className="text-yellow-900/90">
-                    The scanned code does not match any entry in the list. Please try again.
-                </AlertDialogDescription>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-6 w-6" />
+                Ticket Not Found
+              </AlertDialogTitle>
+              <AlertDialogDescription className="text-yellow-900/90">
+                The scanned code does not match any entry in the list. Please try again.
+              </AlertDialogDescription>
             </AlertDialogHeader>
           )}
           <AlertDialogFooter>
@@ -1399,7 +1461,7 @@ export default function DashboardPage() {
         data={qrModalData}
         rowData={qrModalRowData}
       />
-      
+
       <EmailModal
         open={isEmailModalOpen}
         onOpenChange={setIsEmailModalOpen}
@@ -1413,18 +1475,18 @@ export default function DashboardPage() {
         emailColumn={emailColumn}
         headers={headers}
       />
-      
+
       <AlertDialog open={showResendConfirm} onOpenChange={setShowResendConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>⚠️ Email Already Sent Warning</AlertDialogTitle>
             <AlertDialogDescription>
-              {resendConfirmData.previouslySent.length === resendConfirmData.totalSelected 
+              {resendConfirmData.previouslySent.length === resendConfirmData.totalSelected
                 ? `All ${resendConfirmData.previouslySent.length} selected recipients have already received emails.`
                 : `${resendConfirmData.previouslySent.length} out of ${resendConfirmData.totalSelected} selected recipients have already received emails:`
               }
             </AlertDialogDescription>
-            
+
             {resendConfirmData.previouslySent.length > 0 && resendConfirmData.previouslySent.length !== resendConfirmData.totalSelected && (
               <div className="mt-2 max-h-32 overflow-auto bg-muted p-2 rounded">
                 {resendConfirmData.previouslySent.slice(0, 10).map((email, index) => (
@@ -1435,7 +1497,7 @@ export default function DashboardPage() {
                 )}
               </div>
             )}
-            
+
             <div className="mt-3 font-semibold">
               Do you want to proceed and send emails to all selected recipients?
             </div>
@@ -1464,7 +1526,7 @@ export default function DashboardPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      
+
       <AlertDialog open={showInvalidDataConfirm} onOpenChange={setShowInvalidDataConfirm}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -1472,7 +1534,7 @@ export default function DashboardPage() {
             <AlertDialogDescription>
               {invalidDataInfo.invalidRows.length} out of {invalidDataInfo.invalidRows.length + invalidDataInfo.validCount} selected rows have invalid data:
             </AlertDialogDescription>
-            
+
             <div className="mt-2 max-h-32 overflow-auto bg-muted p-2 rounded">
               {invalidDataInfo.invalidRows.slice(0, 10).map(({ index, reason }) => (
                 <div key={index} className="text-xs">
@@ -1485,7 +1547,7 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
-            
+
             <div className="mt-3 font-semibold">
               Do you want to proceed with sending emails to the {invalidDataInfo.validCount} valid recipients only?
             </div>

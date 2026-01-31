@@ -300,7 +300,7 @@ export class UniversalExcelHandler {
 
     const hasColumnWidths = worksheet.columns.some(col => col.width);
     const hasMergedCells = !!(worksheet.model.merges && worksheet.model.merges.length > 0);
-    
+
     let sampleFormatting = null;
     const a1 = worksheet.getCell(1, 1);
     if (a1.font || a1.fill || a1.border || a1.alignment) {
@@ -332,7 +332,7 @@ export class UniversalExcelHandler {
 
     for (const sheetName of this.xlsxWorkbook.SheetNames) {
       const sheet = this.xlsxWorkbook.Sheets[sheetName];
-      
+
       if (sheet['!cols'] || sheet['!rows'] || sheet['!merges']) {
         return true;
       }
@@ -470,44 +470,44 @@ export class UniversalExcelHandler {
     if (cellValue === null || cellValue === undefined) {
       return '';
     }
-    
+
     // Handle different ExcelJS cell value types
     if (typeof cellValue === 'string' || typeof cellValue === 'number') {
       return String(cellValue);
     }
-    
+
     // Handle Date objects
     if (cellValue instanceof Date) {
       return cellValue.toLocaleDateString();
     }
-    
+
     // Handle ExcelJS rich text objects
     if (cellValue && typeof cellValue === 'object') {
       // Check if it's a rich text object
       if (cellValue.richText && Array.isArray(cellValue.richText)) {
         return cellValue.richText.map((rt: any) => rt.text || '').join('');
       }
-      
+
       // Check if it's a formula result
       if (cellValue.result !== undefined) {
         return String(cellValue.result);
       }
-      
+
       // Check if it has a text property
       if (cellValue.text !== undefined) {
         return String(cellValue.text);
       }
-      
+
       // Check if it has a value property
       if (cellValue.value !== undefined) {
         return String(cellValue.value);
       }
-      
+
       // For hyperlinks
       if (cellValue.hyperlink) {
         return cellValue.text || cellValue.hyperlink;
       }
-      
+
       // Fallback to toString if it's a simple object
       try {
         const stringified = JSON.stringify(cellValue);
@@ -518,45 +518,45 @@ export class UniversalExcelHandler {
         // Ignore stringify errors
       }
     }
-    
+
     return String(cellValue);
   }
 
   private deepCopyWorkbook(workbook: XLSX.WorkBook): XLSX.WorkBook {
     const newWorkbook = XLSX.utils.book_new();
-    
+
     Object.keys(workbook.Sheets).forEach(sheetName => {
       const originalSheet = workbook.Sheets[sheetName];
       const newSheet: XLSX.WorkSheet = {};
-      
+
       Object.keys(originalSheet).forEach(key => {
         const value = originalSheet[key];
         if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
           newSheet[key] = JSON.parse(JSON.stringify(value));
         } else if (Array.isArray(value)) {
-          newSheet[key] = value.map(item => 
+          newSheet[key] = value.map(item =>
             typeof item === 'object' && item !== null ? JSON.parse(JSON.stringify(item)) : item
           );
         } else {
           newSheet[key] = value;
         }
       });
-      
+
       newWorkbook.Sheets[sheetName] = newSheet;
     });
-    
+
     newWorkbook.SheetNames = [...workbook.SheetNames];
     if (workbook.Props) newWorkbook.Props = JSON.parse(JSON.stringify(workbook.Props));
     if (workbook.Custprops) newWorkbook.Custprops = JSON.parse(JSON.stringify(workbook.Custprops));
     if (workbook.Workbook) newWorkbook.Workbook = JSON.parse(JSON.stringify(workbook.Workbook));
     if (workbook.vbaraw) newWorkbook.vbaraw = workbook.vbaraw;
-    
+
     return newWorkbook;
   }
 
   private deepCloneWorksheet(originalWs: XLSX.WorkSheet): XLSX.WorkSheet {
     const cloned: XLSX.WorkSheet = {};
-    
+
     Object.keys(originalWs).forEach(key => {
       const value = originalWs[key];
       if (typeof value === 'object' && value !== null) {
@@ -565,7 +565,7 @@ export class UniversalExcelHandler {
         cloned[key] = value;
       }
     });
-    
+
     return cloned;
   }
 }
