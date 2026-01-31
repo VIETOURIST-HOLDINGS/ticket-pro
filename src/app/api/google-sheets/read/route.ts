@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
 
     // Initialize auth (same as connect)
     let auth;
-    
+
     if (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
       auth = new google.auth.GoogleAuth({
         credentials: {
@@ -28,23 +28,23 @@ export async function POST(request: NextRequest) {
     } else if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       // Try refresh token from env first
       let refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-      
+
       // If not in env, try cookies
       if (!refreshToken) {
         const cookieStore = cookies();
         refreshToken = cookieStore.get('google_refresh_token')?.value;
       }
-      
+
       if (refreshToken) {
         const oauth2Client = new google.auth.OAuth2(
           process.env.GOOGLE_CLIENT_ID,
           process.env.GOOGLE_CLIENT_SECRET
         );
-        
+
         oauth2Client.setCredentials({
           refresh_token: refreshToken,
         });
-        
+
         auth = oauth2Client;
       } else {
         return NextResponse.json(
@@ -68,19 +68,19 @@ export async function POST(request: NextRequest) {
     });
 
     const values = response.data.values || [];
-    
+
     if (values.length === 0) {
       return NextResponse.json({ headers: [], rows: [] });
     }
 
     // First row is headers
     const headers = values[0] as string[];
-    
+
     // Find check-in column index
-    const checkInColumnIndex = headers.findIndex((h: string) => 
+    const checkInColumnIndex = headers.findIndex((h: string) =>
       h.toLowerCase().includes('check') && h.toLowerCase().includes('in')
     );
-    
+
     // Convert remaining rows to data
     const rows = [];
     for (let i = 1; i < values.length; i++) {
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
       headers.forEach((header, index) => {
         const cellValue = values[i][index];
         rowData[header] = cellValue || '';
-        
+
         // Map check-in column to checkedInTime
         if (index === checkInColumnIndex && cellValue) {
           rowData.checkedInTime = cellValue;

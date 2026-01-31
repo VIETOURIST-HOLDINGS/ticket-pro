@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
 
     // Initialize auth
     let auth;
-    
+
     // Try service account first
     if (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
       auth = new google.auth.GoogleAuth({
@@ -25,35 +25,36 @@ export async function POST(request: NextRequest) {
         },
         scopes: ['https://www.googleapis.com/auth/spreadsheets'],
       });
-    } 
+    }
     // Try OAuth with refresh token from env
     else if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REFRESH_TOKEN) {
       const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
         process.env.GOOGLE_CLIENT_SECRET
       );
-      
+
       oauth2Client.setCredentials({
         refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
       });
-      
+
       auth = oauth2Client;
     }
+
     // Try OAuth with cookies
     else if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       const cookieStore = cookies();
       const refreshToken = cookieStore.get('google_refresh_token')?.value;
-      
+
       if (refreshToken) {
         const oauth2Client = new google.auth.OAuth2(
           process.env.GOOGLE_CLIENT_ID,
           process.env.GOOGLE_CLIENT_SECRET
         );
-        
+
         oauth2Client.setCredentials({
           refresh_token: refreshToken,
         });
-        
+
         auth = oauth2Client;
       } else {
         return NextResponse.json(
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error('Google Sheets connection error:', error);
-    
+
     // More detailed error for debugging
     if (error.response) {
       console.error('Error response:', {
@@ -92,7 +93,7 @@ export async function POST(request: NextRequest) {
         data: error.response.data
       });
     }
-    
+
     // Common error messages
     let errorMessage = 'Failed to connect to Google Sheets';
     if (error.message?.includes('unauthorized_client')) {
@@ -109,7 +110,7 @@ export async function POST(request: NextRequest) {
     } else if (error.message?.includes('Requested entity was not found')) {
       errorMessage = 'SHEET_NOT_FOUND:The spreadsheet was not found. Please check the URL and make sure the sheet exists.';
     }
-    
+
     return NextResponse.json(
       { error: errorMessage },
       { status: 500 }
