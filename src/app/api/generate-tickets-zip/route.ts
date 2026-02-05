@@ -1,14 +1,39 @@
+// /api/generate-tickets-batch/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import QRCode from 'qrcode';
 import sharp from 'sharp';
 import archiver from 'archiver';
-import { Readable } from 'stream';
 
-// Extend global interface
+// ⭐ Config for QR code - ĐIỀU CHỈNH Ở ĐÂY
+const TICKET_CONFIG = {
+  template: 'ticket.jpg',
+  qrCode: {
+    size: 2800,
+    position: {
+      x: 9650,
+      y: 2500
+    },
+    color: {
+      dark: '#000000',
+      light: '#FFFFFF'
+    },
+    margin: 1
+  }
+};
+
+
+// Progress tracking store
+interface ProgressData {
+  current: number;
+  total: number;
+  completed: boolean;
+  lastUpdated: number;
+}
+
 declare global {
-  var ticketProgress: Record<string, { current: number; total: number; completed: boolean }> | undefined;
+  var batchProgress: Record<string, ProgressData> | undefined;
 }
 
 export async function POST(request: NextRequest) {
@@ -22,230 +47,235 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Simple in-memory progress store for this request
-    let progressState = { current: 0, total: tickets.length, completed: false };
-    global.ticketProgress = global.ticketProgress || {};
-    global.ticketProgress[sessionId] = progressState;
+    if (!sessionId) {
+      return NextResponse.json(
+        { error: 'Session ID is required for progress tracking' },
+        { status: 400 }
+      );
+    }
 
-    // Update progress function
-    const updateProgress = (current: number, total: number, completed = false) => {
-      if (sessionId && global.ticketProgress) {
-        global.ticketProgress[sessionId] = { current, total, completed };
+    // Initialize progress tracking
+    global.batchProgress = global.batchProgress || {};
+    const initializeProgress = () => {
+      global.batchProgress![sessionId] = {
+        current: 0,
+        total: tickets.length,
+        completed: false,
+        lastUpdated: Date.now()
+      };
+    };
+
+    const updateProgress = (current: number, completed = false) => {
+      if (global.batchProgress?.[sessionId]) {
+        global.batchProgress[sessionId] = {
+          current,
+          total: tickets.length,
+          completed,
+          lastUpdated: Date.now()
+        };
       }
     };
 
-    // Read both ticket templates
-    const regularSvgPath = path.join(process.cwd(), 'public', 'ticket.svg');
-    const vipSvgPath = path.join(process.cwd(), 'public', 'ticket_vip.svg');
-    const regularSvgTemplate = fs.readFileSync(regularSvgPath, 'utf-8');
-    const vipSvgTemplate = fs.readFileSync(vipSvgPath, 'utf-8');
+    initializeProgress();
 
-    // Create a ZIP archive
+    // Check if template exists
+    const templatePath = path.join(process.cwd(), 'public', TICKET_CONFIG.template);
+    if (!fs.existsSync(templatePath)) {
+      return NextResponse.json(
+        {
+          error: `Template file not found: ${TICKET_CONFIG.template}`,
+          suggestion: 'Place your template in /public/ticket.jpg'
+        },
+        { status: 404 }
+      );
+    }
+
+    // Read template once for better performance
+    const templateBuffer = fs.readFileSync(templatePath);
+
+    // Create ZIP archive
     const archive = archiver('zip', {
-      zlib: { level: 6 } // Balanced compression for speed
+      zlib: { level: 6 } // Balanced compression
     });
 
     const chunks: Buffer[] = [];
-    
-    // Setup archive event listeners
     let archiveEnded = false;
+
     const archivePromise = new Promise<void>((resolve, reject) => {
       archive.on('end', () => {
-        console.log('Archive ended');
         archiveEnded = true;
         resolve();
       });
-      archive.on('error', (err) => {
-        console.error('Archive error:', err);
-        reject(err);
-      });
-      archive.on('warning', (err) => {
-        console.warn('Archive warning:', err);
-      });
+      archive.on('error', reject);
+      archive.on('data', (chunk) => chunks.push(chunk));
     });
 
-    // Collect archive data
-    archive.on('data', (chunk) => {
-      chunks.push(chunk);
-      console.log(`Archive chunk: ${chunk.length} bytes`);
-    });
-    
-    // Initialize progress
-    updateProgress(0, tickets.length);
+    // Start progress
+    updateProgress(0);
 
-    // Process tickets in batches for better performance
-    const batchSize = 5;
+    // Process tickets in batches for memory efficiency
+    const BATCH_SIZE = 3; // Smaller batch for JPG processing
     let processedCount = 0;
-    
-    for (let i = 0; i < tickets.length; i += batchSize) {
-      const batch = tickets.slice(i, i + batchSize);
-      
-      await Promise.all(batch.map(async (ticket) => {
+    let failedTickets: Array<{ rowNumber: number; error: string }> = [];
+
+    for (let i = 0; i < tickets.length; i += BATCH_SIZE) {
+      const batch = tickets.slice(i, Math.min(i + BATCH_SIZE, tickets.length));
+
+      const batchPromises = batch.map(async (ticket) => {
         try {
-          // Check if this ticket is for VIP
-          let isVip = false;
-          if (ticket.rowData) {
-            const vipColumnKey = Object.keys(ticket.rowData).find(key => 
-              key.toLowerCase() === 'vip'
-            );
-            
-            if (vipColumnKey) {
-              const vipValue = ticket.rowData[vipColumnKey];
-              isVip = vipValue && (
-                vipValue.toString() === '1' || 
-                vipValue.toString().toUpperCase() === 'X' || 
-                vipValue.toString().toLowerCase() === 'yes'
-              );
-            }
-          }
-          
-          // Select appropriate template
-          const svgTemplate = isVip ? vipSvgTemplate : regularSvgTemplate;
-          
-          // Generate QR code SVG locally
-          const qrSvgContent = await QRCode.toString(ticket.qrData, {
+          // ⭐ Generate QR code for this ticket
+          // ⭐ Generate QR code SVG (NO BORDER)
+          const qrSvg = await QRCode.toString(ticket.qrData, {
             type: 'svg',
-            width: 368,
-            margin: 0,
+            width: TICKET_CONFIG.qrCode.size,
+            margin: TICKET_CONFIG.qrCode.margin,
             color: {
-              dark: '#000000',
-              light: '#FFFFFF'
+              dark: TICKET_CONFIG.qrCode.color.dark,
+              light: TICKET_CONFIG.qrCode.color.light
             }
           });
-          
-          // Extract QR code elements
-          const qrCodeElements = qrSvgContent
-            .replace(/<\?xml[^>]*\?>/, '')
-            .replace(/<svg[^>]*>/, '')
-            .replace(/<\/svg>/, '')
-            .trim();
 
-          let ticketSvg = svgTemplate;
-          
-          // Handle QR code placement based on template type
-          if (isVip) {
-            // VIP template uses different coordinates
-            const vipScale = 226.72 / 29; // Scale factor for VIP QR code
-            const vipQrCodeGroup = `
-              <g transform="translate(1657.38, 787.36)">
-                <g transform="scale(${vipScale})">
-                  ${qrCodeElements}
-                </g>
-              </g>
-            `;
-            ticketSvg = ticketSvg.replace(
-              /<rect[^>]*id="QR-CODE"[^>]*\/>/,
-              vipQrCodeGroup
-            );
-            
-            // Replace NAME and TITLE for VIP template
-            if (ticket.rowData) {
-              // Look for NAME column
-              const nameColumnKey = Object.keys(ticket.rowData).find(key => 
-                key.toLowerCase() === 'name' || key.toLowerCase() === 'tên' || key.toLowerCase() === 'họ tên'
-              );
-              if (nameColumnKey) {
-                const name = ticket.rowData[nameColumnKey] || '';
-                ticketSvg = ticketSvg.replace(
-                  /(<text[^>]*id="NAME"[^>]*?)([^>]*>)/,
-                  `$1 text-anchor="middle"$2`
-                );
-                ticketSvg = ticketSvg.replace(
-                  /(<text[^>]*id="NAME"[^>]*>[\s\S]*?<tspan[^>]*x=")[^"]*("[\s\S]*?>)[^<]*([\s\S]*?<\/tspan>[\s\S]*?<\/text>)/,
-                  `$1320$2${name}$3`
-                );
-              }
-              
-              // Look for TITLE column
-              const titleColumnKey = Object.keys(ticket.rowData).find(key => 
-                key.toLowerCase() === 'title' || key.toLowerCase() === 'chức vụ' || key.toLowerCase() === 'position'
-              );
-              if (titleColumnKey) {
-                const title = ticket.rowData[titleColumnKey] || '';
-                ticketSvg = ticketSvg.replace(
-                  /(<text[^>]*id="TITLE"[^>]*?)([^>]*>)/,
-                  `$1 text-anchor="middle"$2`
-                );
-                ticketSvg = ticketSvg.replace(
-                  /(<text[^>]*id="TITLE"[^>]*>[\s\S]*?<tspan[^>]*x=")[^"]*("[\s\S]*?>)[^<]*([\s\S]*?<\/tspan>[\s\S]*?<\/text>)/,
-                  `$1320$2${title}$3`
-                );
-              }
-            }
-          } else {
-            // Regular template
-            const scale = 368 / 29; // Scale factor to make QR code fill the entire area
-            const qrCodeGroup = `
-              <g transform="translate(1200, 284)">
-                <g transform="scale(${scale})">
-                  ${qrCodeElements}
-                </g>
-              </g>
-            `;
-            ticketSvg = ticketSvg.replace(
-              /<rect x="1200" y="284" width="368" height="368" stroke="white" stroke-width="0" id="qr-code"\/>/,
-              qrCodeGroup
-            );
-          }
+          // Convert SVG to buffer
+          const qrBuffer = Buffer.from(qrSvg);
 
-          // Convert SVG to JPG using Sharp with optimized settings
-          const jpgBuffer = await sharp(Buffer.from(ticketSvg))
-            .jpeg({ 
-              quality: 75,
-              density: 72,
-              progressive: true
+
+          // ⭐ Create final ticket image
+          const finalImage = await sharp(templateBuffer)
+            .composite([{
+              input: qrBuffer,
+              left: TICKET_CONFIG.qrCode.position.x,
+              top: TICKET_CONFIG.qrCode.position.y,
+            }])
+            .jpeg({
+              quality: 85,
+              mozjpeg: true
             })
             .toBuffer();
 
-          // Add to ZIP with sequential naming
-          const filename = `${ticket.rowNumber}.jpg`;
-          archive.append(jpgBuffer, { name: filename });
-          console.log(`Added ${filename} to ZIP (${jpgBuffer.length} bytes)`);
 
-          // Update progress
-          processedCount++;
-          updateProgress(processedCount, tickets.length);
+          // ⭐ Add to ZIP
+          const filename = ticket.rowData?.name
+            ? `${ticket.rowData.name.replace(/[^a-z0-9]/gi, '_')}.jpg`
+            : `ticket_${ticket.rowNumber || processedCount + 1}.jpg`;
 
-        } catch (ticketError) {
-          console.error(`Error processing ticket ${ticket.rowNumber}:`, ticketError);
-          // Continue with other tickets even if one fails
+          archive.append(finalImage, { name: filename });
+
           processedCount++;
-          updateProgress(processedCount, tickets.length);
+          updateProgress(processedCount);
+
+          return { success: true, filename };
+
+        } catch (error: any) {
+          console.error(`Error processing ticket ${ticket.rowNumber}:`, error);
+          failedTickets.push({
+            rowNumber: ticket.rowNumber,
+            error: error.message
+          });
+
+          processedCount++;
+          updateProgress(processedCount);
+
+          return { success: false, error: error.message };
         }
-      }));
+      });
+
+      await Promise.all(batchPromises);
+
+      // Small delay between batches to prevent memory spike
+      if (i + BATCH_SIZE < tickets.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
     }
 
-    // Finalize the archive and wait for completion
-    console.log('Finalizing archive...');
+    // Finalize archive
     archive.finalize();
-    console.log('Waiting for archive to complete...');
     await archivePromise;
 
-    // Combine all chunks into final buffer
-    const zipBuffer = Buffer.concat(chunks);
-    console.log(`Total chunks: ${chunks.length}, Combined buffer size: ${zipBuffer.length}`);
-
     // Mark as completed
-    updateProgress(tickets.length, tickets.length, true);
+    updateProgress(tickets.length, true);
 
-    console.log(`Generated ZIP file with ${zipBuffer.length} bytes`);
+    // Combine chunks
+    const zipBuffer = Buffer.concat(chunks);
+
+    // Cleanup old progress data (older than 1 hour)
+    if (global.batchProgress) {
+      const oneHourAgo = Date.now() - 60 * 60 * 1000;
+      for (const [key, data] of Object.entries(global.batchProgress)) {
+        if (data.lastUpdated < oneHourAgo) {
+          delete global.batchProgress[key];
+        }
+      }
+    }
+
+    console.log(`✅ Generated ${tickets.length} tickets, failed: ${failedTickets.length}`);
 
     return new NextResponse(zipBuffer, {
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="tickets-${Date.now()}.zip"`,
+        'Content-Disposition': `attachment; filename="tickets_${Date.now()}.zip"`,
         'Content-Length': zipBuffer.length.toString(),
+        'X-Tickets-Generated': tickets.length.toString(),
+        'X-Tickets-Failed': failedTickets.length.toString(),
       },
     });
 
-  } catch (error) {
-    console.error('Generate tickets ZIP error:', error);
-    // Clean up progress on error
-    if (sessionId && global.ticketProgress?.[sessionId]) {
-      delete global.ticketProgress[sessionId];
+  } catch (error: any) {
+    console.error('Generate tickets batch error:', error);
+
+    // Cleanup progress on error
+    if (sessionId && global.batchProgress?.[sessionId]) {
+      delete global.batchProgress[sessionId];
     }
+
     return NextResponse.json(
-      { error: 'Failed to generate tickets ZIP', details: error instanceof Error ? error.message : String(error) },
+      {
+        error: 'Failed to generate tickets batch',
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// ⭐ API để lấy progress
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const sessionId = searchParams.get('sessionId');
+
+    if (!sessionId) {
+      return NextResponse.json(
+        { error: 'Session ID is required' },
+        { status: 400 }
+      );
+    }
+
+    const progress = global.batchProgress?.[sessionId];
+
+    if (!progress) {
+      return NextResponse.json(
+        { error: 'Progress not found or expired' },
+        { status: 404 }
+      );
+    }
+
+    // Clean up if completed more than 5 minutes ago
+    if (progress.completed && Date.now() - progress.lastUpdated > 5 * 60 * 1000) {
+      delete global.batchProgress![sessionId];
+    }
+
+    return NextResponse.json({
+      current: progress.current,
+      total: progress.total,
+      completed: progress.completed,
+      percentage: Math.round((progress.current / progress.total) * 100),
+      lastUpdated: progress.lastUpdated
+    });
+
+  } catch (error) {
+    console.error('Get progress error:', error);
+    return NextResponse.json(
+      { error: 'Failed to get progress' },
       { status: 500 }
     );
   }

@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     // Create nodemailer transporter with custom SMTP server
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_SERVER,
-      port: 587, // or 465 for SSL
+      port: 465, // or 465 for SSL
       secure: false, // true for 465, false for other ports
       auth: {
         user: process.env.EMAIL_USER,
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
     console.log('Email server connection verified!');
 
     // Parse BCC list from environment
-    const bccList = process.env.SENDER_BCC 
+    const bccList = process.env.SENDER_BCC
       ? process.env.SENDER_BCC.replace(/"/g, '').split(';').filter(email => email.trim())
       : [];
 
@@ -80,15 +80,15 @@ If you receive this email, your email configuration is working correctly!`,
 
   } catch (error) {
     console.error('Test email error:', error);
-    
+
     let errorMessage = 'Unknown error';
     if (error instanceof Error) {
       errorMessage = error.message;
     }
 
     return NextResponse.json(
-      { 
-        error: 'Failed to send test email', 
+      {
+        error: 'Failed to send test email',
         details: errorMessage,
         config: {
           server: process.env.EMAIL_SERVER,

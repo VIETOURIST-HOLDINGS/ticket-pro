@@ -68,7 +68,7 @@
     "react-hook-form": "7.50.1",
     "react-quill": "^2.0.0",
     "recharts": "^2.15.1",
-    "sharp": "^0.34.3",
+    "sharp": "^0.34.5",
     "tailwind-merge": "2.2.1",
     "tailwindcss-animate": "1.0.7",
     "xlsx": "^0.18.5",

@@ -6,7 +6,34 @@ import QRCode from 'qrcode';
 import sharp from 'sharp';
 import { google } from 'googleapis';
 
-// Function to update Google Sheets email status
+// ⭐⭐ CẤU HÌNH TICKET - ĐIỀU CHỈNH Ở ĐÂY ⭐⭐
+const TICKET_CONFIG = {
+  template: 'ticket.jpg',           // Template file name
+  qrCode: {
+    size: 2400,
+    position: {
+      x: 9850,
+      y: 2950
+    },
+    color: {
+      dark: '#000000',
+      light: '#FFFFFF'
+    },
+    margin: 1
+  }
+
+};
+
+const ZONE_TEMPLATE_MAP: Record<string, string> = {
+  'Khát Vọng': 'ticket_KV.jpg',
+  'Đại Ngàn': 'ticket_DN.jpg',
+  'Hành Trình Thanh Xuân': 'ticket_HTTX.jpg',
+  'Ngân Vang': 'ticket_NV.jpg',
+};
+
+
+// --- PHẦN 1: CÁC HÀM CẬP NHẬT GOOGLE SHEETS ---
+
 async function updateGoogleSheetsEmailStatus(
   spreadsheetId: string,
   sheetName: string,
@@ -14,20 +41,7 @@ async function updateGoogleSheetsEmailStatus(
   emailSentColumnName: string
 ) {
   console.log('=== Starting Google Sheets Email Status Update ===');
-  console.log('Parameters:', {
-    spreadsheetId,
-    sheetName,
-    rowIndices,
-    emailSentColumnName
-  });
-  
-  // Create service account auth
-  console.log('Service account config for email status update:', {
-    hasEmail: !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    hasPrivateKey: !!process.env.GOOGLE_PRIVATE_KEY,
-    email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  });
-  
+
   const auth = new google.auth.GoogleAuth({
     credentials: {
       client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -38,57 +52,33 @@ async function updateGoogleSheetsEmailStatus(
 
   const sheets = google.sheets({ version: 'v4', auth });
 
-  // Get sheet metadata to find the column index
-  const metadataResponse = await sheets.spreadsheets.get({
-    spreadsheetId,
-  });
+  const metadataResponse = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = metadataResponse.data.sheets?.find(s => s.properties?.title === sheetName);
+  if (!sheet) throw new Error(`Sheet "${sheetName}" not found`);
 
-  const sheet = metadataResponse.data.sheets?.find(
-    s => s.properties?.title === sheetName
-  );
-
-  if (!sheet) {
-    throw new Error(`Sheet "${sheetName}" not found`);
-  }
-
-  // Get current headers to find the email sent column
   const headersResponse = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${sheetName}!1:1`,
   });
-
   const headers = headersResponse.data.values?.[0] as string[];
-  console.log('Current headers:', headers);
-  
-  let emailSentColumnIndex = headers?.findIndex(h => 
-    h?.toLowerCase().includes('email sent') || 
+
+  let emailSentColumnIndex = headers?.findIndex(h =>
+    h?.toLowerCase().includes('email sent') ||
     h?.toLowerCase().includes('email_sent') ||
     h === emailSentColumnName
   );
-  
-  console.log('Email sent column search:', {
-    emailSentColumnName,
-    foundIndex: emailSentColumnIndex,
-    headers: headers?.map((h, i) => `${i}: ${h}`)
-  });
 
-  // If column doesn't exist, add it
   if (emailSentColumnIndex === -1) {
     headers?.push(emailSentColumnName);
     emailSentColumnIndex = headers.length - 1;
-    
-    // Update headers
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${sheetName}!1:1`,
       valueInputOption: 'RAW',
-      requestBody: {
-        values: [headers],
-      },
+      requestBody: { values: [headers] },
     });
   }
 
-  // Convert column index to letter (A, B, C, ..., Z, AA, AB, etc.)
   const getColumnLetter = (index: number): string => {
     let letter = '';
     while (index >= 0) {
@@ -99,53 +89,31 @@ async function updateGoogleSheetsEmailStatus(
   };
   const columnLetter = getColumnLetter(emailSentColumnIndex);
 
-  // Update each successful row
   const timestamp = new Date().toLocaleString('vi-VN');
   const updates = rowIndices.map(rowIndex => ({
-    range: `${sheetName}!${columnLetter}${rowIndex + 2}`, // +2 because row indices are 0-based and we skip header
+    range: `${sheetName}!${columnLetter}${rowIndex + 2}`,
     values: [[timestamp]],
   }));
-  
-  console.log('Preparing updates:', {
-    columnLetter,
-    rowIndices,
-    updates: updates.slice(0, 3), // Show first 3 for debugging
-    timestamp
-  });
 
-  // Batch update all rows
   try {
     const updateResponse = await sheets.spreadsheets.values.batchUpdate({
       spreadsheetId,
-      requestBody: {
-        valueInputOption: 'RAW',
-        data: updates,
-      },
+      requestBody: { valueInputOption: 'RAW', data: updates },
     });
-    console.log('Google Sheets update response:', {
-      updatedCells: updateResponse.data.totalUpdatedCells,
-      updatedRows: updateResponse.data.totalUpdatedRows,
-      updatedColumns: updateResponse.data.totalUpdatedColumns,
-    });
+    console.log('Google Sheets updated cells:', updateResponse.data.totalUpdatedCells);
   } catch (updateError: any) {
-    console.error('Google Sheets update error:', {
-      message: updateError.message,
-      code: updateError.code,
-      errors: updateError.errors,
-      status: updateError.status,
-    });
-    throw updateError;
+    console.error('Google Sheets update error:', updateError);
   }
 }
 
-// Function to update Google Sheets email error status
 async function updateGoogleSheetsEmailErrors(
   spreadsheetId: string,
   sheetName: string,
   failedRows: { rowIndex: number; error: string }[],
   emailErrorColumnName: string
 ) {
-  // Create service account auth
+  console.log('=== Updating Google Sheets with Email Errors ===');
+
   const auth = new google.auth.GoogleAuth({
     credentials: {
       client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -156,36 +124,29 @@ async function updateGoogleSheetsEmailErrors(
 
   const sheets = google.sheets({ version: 'v4', auth });
 
-  // Get current headers to find the email error column
   const headersResponse = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${sheetName}!1:1`,
   });
-
   const headers = headersResponse.data.values?.[0] as string[];
-  let emailErrorColumnIndex = headers?.findIndex(h => 
-    h?.toLowerCase().includes('email error') || 
+
+  let emailErrorColumnIndex = headers?.findIndex(h =>
+    h?.toLowerCase().includes('email error') ||
     h?.toLowerCase().includes('email_error') ||
     h === emailErrorColumnName
   );
 
-  // If column doesn't exist, add it
   if (emailErrorColumnIndex === -1) {
     headers?.push(emailErrorColumnName);
     emailErrorColumnIndex = headers.length - 1;
-    
-    // Update headers
     await sheets.spreadsheets.values.update({
       spreadsheetId,
       range: `${sheetName}!1:1`,
       valueInputOption: 'RAW',
-      requestBody: {
-        values: [headers],
-      },
+      requestBody: { values: [headers] },
     });
   }
 
-  // Convert column index to letter (A, B, C, ..., Z, AA, AB, etc.)
   const getColumnLetter = (index: number): string => {
     let letter = '';
     while (index >= 0) {
@@ -194,507 +155,390 @@ async function updateGoogleSheetsEmailErrors(
     }
     return letter;
   };
-  const columnLetter = getColumnLetter(emailErrorColumnIndex);
 
-  // Update each failed row with error message
+  const columnLetter = getColumnLetter(emailErrorColumnIndex);
   const timestamp = new Date().toLocaleString('vi-VN');
   const updates = failedRows.map(failedRow => ({
-    range: `${sheetName}!${columnLetter}${failedRow.rowIndex + 2}`, // +2 because row indices are 0-based and we skip header
-    values: [[`${timestamp}: ${failedRow.error}`]],
+    range: `${sheetName}!${columnLetter}${failedRow.rowIndex + 2}`,
+    values: [[`${timestamp}: ${failedRow.error.substring(0, 100)}`]],
   }));
 
-  // Batch update all rows
   try {
     const updateResponse = await sheets.spreadsheets.values.batchUpdate({
       spreadsheetId,
-      requestBody: {
-        valueInputOption: 'RAW',
-        data: updates,
-      },
+      requestBody: { valueInputOption: 'RAW', data: updates },
     });
-    console.log('Google Sheets update response:', {
-      updatedCells: updateResponse.data.totalUpdatedCells,
-      updatedRows: updateResponse.data.totalUpdatedRows,
-      updatedColumns: updateResponse.data.totalUpdatedColumns,
-    });
+    console.log('Google Sheets error cells updated:', updateResponse.data.totalUpdatedCells);
   } catch (updateError: any) {
-    console.error('Google Sheets update error:', {
-      message: updateError.message,
-      code: updateError.code,
-      errors: updateError.errors,
-      status: updateError.status,
-    });
-    throw updateError;
+    console.error('Google Sheets error update failed:', updateError);
   }
 }
+
+// --- PHẦN 2: HÀM XỬ LÝ TICKET JPG ---
 
 interface EmailData {
   email: string;
   name?: string;
   qrData: string;
   rowNumber: string;
-  originalRowIndex?: number; // Index in the original data for updating
-  rowData?: Record<string, any>; // Full row data for template placeholders
+  originalRowIndex?: number;
+  rowData: {
+    __rowNum__?: number;
+
+    NO?: string;
+    NAME?: string;
+    EMAIL?: string;
+    "NUMBER PHONE"?: string;
+    "QR-CODE"?: string;
+
+    TYPE?: string;
+    ZONE?: string;
+
+    "Checked In At"?: string;
+    checkedInTime?: string | null;
+
+    "Email Sent"?: string;
+    "Email Error"?: string;
+    "Seat Status"?: string;
+
+    [key: string]: any; // cho phép cột phát sinh thêm
+  };
 }
+
+// Hàm tạo ticket từ file JPG template với config
+async function createTicketFromJPG(
+  emailData: EmailData,
+  attachTicket: boolean,
+  appendTicketInline: boolean
+): Promise<{ attachments: any[]; jpgBuffer: Buffer | null }> {
+  const attachments: any[] = [];
+  let jpgBuffer: Buffer | null = null;
+
+  // Đường dẫn đến file template JPG
+  const zone = emailData.rowData?.ZONE?.trim();
+
+  const templateFile =
+    (zone && ZONE_TEMPLATE_MAP[zone]) || TICKET_CONFIG.template;
+
+  const templatePath = path.join(process.cwd(), 'public', templateFile);
+
+
+  // Kiểm tra file template tồn tại
+  if (!fs.existsSync(templatePath)) {
+    console.error(`❌ Template file not found: ${templatePath}`);
+    console.log(`🔍 Looking for: ${TICKET_CONFIG.template} in public folder`);
+    return { attachments, jpgBuffer: null };
+  }
+
+  console.log(`✅ Using template: ${TICKET_CONFIG.template}`);
+  console.log(`📏 QR Size: ${TICKET_CONFIG.qrCode.size}px, Position: (${TICKET_CONFIG.qrCode.position.x}, ${TICKET_CONFIG.qrCode.position.y})`);
+
+  // Đọc template JPG
+  const templateBuffer = fs.readFileSync(templatePath);
+
+  // Tạo QR code với config
+  const qrBuffer = await QRCode.toBuffer(emailData.qrData, {
+    width: TICKET_CONFIG.qrCode.size,
+    margin: TICKET_CONFIG.qrCode.margin,
+    color: {
+      dark: TICKET_CONFIG.qrCode.color.dark,
+      light: TICKET_CONFIG.qrCode.color.light
+    }
+  });
+
+  console.log(`✅ QR Code generated: ${qrBuffer.length} bytes`);
+
+  // Đọc metadata của template để biết kích thước
+  const templateMetadata = await sharp(templateBuffer).metadata();
+  console.log(`📐 Template dimensions: ${templateMetadata.width} x ${templateMetadata.height}`);
+
+  // Tạo overlay SVG chỉ chứa QR code (không có text nếu bạn không cần)
+  const svgOverlay = `
+    <svg width="${templateMetadata.width || 10000}" height="${templateMetadata.height || 10000}">
+      <!-- Thêm QR code vào vị trí đã cấu hình -->
+      <image href="data:image/png;base64,${qrBuffer.toString('base64')}" 
+             x="${TICKET_CONFIG.qrCode.position.x}" 
+             y="${TICKET_CONFIG.qrCode.position.y}" 
+             width="${TICKET_CONFIG.qrCode.size}" 
+             height="${TICKET_CONFIG.qrCode.size}"/>
+    </svg>
+  `;
+
+  // Kết hợp template JPG với QR code
+  try {
+    jpgBuffer = await sharp(templateBuffer)
+      .composite([
+        {
+          input: Buffer.from(svgOverlay),
+          top: 0,
+          left: 0
+        }
+      ])
+      .jpeg({ quality: 95 }) // Chất lượng cao
+      .toBuffer();
+
+    console.log(`✅ Ticket created successfully: ${jpgBuffer.length} bytes`);
+
+    // Tạo attachment nếu cần
+    if ((attachTicket || appendTicketInline) && jpgBuffer) {
+      const att: any = {
+        filename: `${emailData.rowData.NAME}_${emailData.rowData.ZONE}_${emailData.rowData.NO}.jpg`,
+        content: jpgBuffer,
+        contentType: 'image/jpeg'
+      };
+
+      if (appendTicketInline) {
+        att.cid = `${emailData.rowData.NAME}_${emailData.rowData.ZONE}_${emailData.rowData.NO}`;
+        att.contentDisposition = 'inline';
+      }
+
+      attachments.push(att);
+      console.log(`📎 Attachment added for ${emailData.email}`);
+    }
+  } catch (error: any) {
+    console.error(`❌ Error creating ticket:`, error.message);
+  }
+
+  return { attachments, jpgBuffer };
+}
+
+// --- PHẦN 3: API GỬI EMAIL ---
 
 export async function POST(request: NextRequest) {
   try {
-    const { 
-      emails, 
-      subject, 
-      message, 
-      senderEmail, 
-      senderName, 
+    const {
+      emails,
+      subject,
+      message,
+      senderEmail,
+      senderName,
       attachTicket,
       appendTicketInline,
       spreadsheetId,
       sheetName,
-      emailColumnIndex,
       emailSentColumnName
-    }: {
-      emails: EmailData[];
-      subject: string;
-      message: string;
-      senderEmail: string;
-      senderName?: string;
-      attachTicket: boolean;
-      appendTicketInline?: boolean;
-      spreadsheetId?: string;
-      sheetName?: string;
-      emailColumnIndex?: number;
-      emailSentColumnName?: string;
     } = await request.json();
 
     if (!emails || !Array.isArray(emails) || emails.length === 0) {
+      return NextResponse.json({ error: 'Emails array is required' }, { status: 400 });
+    }
+
+    if (!subject || !message) {
+      return NextResponse.json({ error: 'Subject and message are required' }, { status: 400 });
+    }
+
+    // --- CẤU HÌNH GMAIL VỚI APP PASSWORD ---
+    const GMAIL_USER = process.env.EMAIL_USER || 'hanhtrinhvietnam2025@gmail.com';
+    const GMAIL_PASS = (process.env.EMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
+
+    // Kiểm tra credentials
+    if (!GMAIL_USER || !GMAIL_PASS) {
+      console.error('❌ Missing Gmail credentials in environment variables');
       return NextResponse.json(
-        { error: 'Emails array is required' },
-        { status: 400 }
+        { error: 'Email service configuration error. Please check EMAIL_USER and EMAIL_APP_PASSWORD in .env.local' },
+        { status: 500 }
       );
     }
 
-    if (!subject || !message || !senderEmail) {
-      return NextResponse.json(
-        { error: 'Subject, message, and sender email are required' },
-        { status: 400 }
-      );
-    }
+    console.log(`📧 Using Gmail account: ${GMAIL_USER}`);
 
-    // Create nodemailer transporter with custom SMTP server
     const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_SERVER,
-      port: 587, // or 465 for SSL
-      secure: false, // true for 465, false for other ports
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_APP_PASSWORD,
+        user: GMAIL_USER,
+        pass: GMAIL_PASS,
       },
-      tls: {
-        rejectUnauthorized: false // Allow self-signed certificates
-      }
     });
 
-    // Load both ticket templates
-    const regularSvgTemplate = (attachTicket || appendTicketInline) ? fs.readFileSync(path.join(process.cwd(), 'public', 'ticket.svg'), 'utf-8') : null;
-    const vipSvgTemplate = (attachTicket || appendTicketInline) ? fs.readFileSync(path.join(process.cwd(), 'public', 'ticket_vip.svg'), 'utf-8') : null;
-    
+    // Kiểm tra kết nối SMTP
+    try {
+      await transporter.verify();
+      console.log('✅ SMTP connection verified successfully');
+    } catch (verifyError: any) {
+      console.error('❌ SMTP connection failed:', verifyError.message);
+      return NextResponse.json(
+        {
+          error: 'Failed to connect to Gmail SMTP server',
+          details: verifyError.message,
+          tip: 'Check your App Password and ensure 2FA is enabled on your Google account'
+        },
+        { status: 500 }
+      );
+    }
+
     // Load email template
     const emailTemplatePath = path.join(process.cwd(), 'public', 'templates', 'email.eml');
     let emailTemplate = '';
     try {
       const templateContent = fs.readFileSync(emailTemplatePath, 'utf-8');
-      
-      // Parse to remove subject line from message body
       const lines = templateContent.split('\n');
       let messageStart = 0;
-      
       for (let i = 0; i < lines.length; i++) {
-        if (lines[i].startsWith('Subject: ')) {
-          messageStart = i + 1;
-          break;
-        }
+        if (lines[i].startsWith('Subject: ')) { messageStart = i + 1; break; }
       }
-      
-      // Skip empty lines after subject
-      while (messageStart < lines.length && lines[messageStart].trim() === '') {
-        messageStart++;
-      }
-      
-      // Get message content only (no subject)
+      while (messageStart < lines.length && lines[messageStart].trim() === '') { messageStart++; }
       emailTemplate = lines.slice(messageStart).join('\n').trim();
-      
     } catch (error) {
-      // Fallback to provided message if template doesn't exist
       emailTemplate = message;
     }
-    
-    // Use environment sender info as defaults
-    const defaultSenderName = process.env.SENDER_NAME || senderName || 'Event Team';
-    const defaultSenderEmail = process.env.SENDER_EMAIL || process.env.EMAIL_USER || senderEmail;
-    
-    // Parse BCC list from environment
-    const bccList = process.env.SENDER_BCC 
+
+    // Default sender info
+    const defaultSenderName = senderName || 'Event Team';
+    const defaultSenderEmail = GMAIL_USER;
+
+    // Parse BCC
+    const bccList = process.env.SENDER_BCC
       ? process.env.SENDER_BCC.replace(/"/g, '').split(';').filter(email => email.trim())
       : [];
-    
+
     let successCount = 0;
     let failureCount = 0;
     const errors: string[] = [];
-    const successfulEmailRows: number[] = []; // Track rows that need to be updated
-    const failedEmailRows: { rowIndex: number; error: string }[] = []; // Track failed rows with error messages
+    const successfulEmailRows: number[] = [];
+    const failedEmailRows: { rowIndex: number; error: string }[] = [];
 
-    // Function to validate email address
-    const validateEmail = (email: string): boolean => {
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      return emailRegex.test(email);
-    };
-
-    // Helper function to delay between emails
+    const validateEmail = (email: string): boolean => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-    
-    // Send emails one by one to avoid rate limiting
+
+    // --- BẮT ĐẦU VÒNG LẶP GỬI MAIL ---
     for (let i = 0; i < emails.length; i++) {
       const emailData = emails[i];
-      
-      // Add delay between emails (except for the first one)
+
+      // Delay để tránh bị Gmail chặn
       if (i > 0) {
-        // Progressive delay: 1-2 seconds for first 10, 2-3 seconds for next 10, etc.
-        const baseDelay = Math.min(Math.floor(i / 10) + 1, 5) * 1000; // Max 5 seconds
-        const randomDelay = Math.random() * 1000; // 0-1 second random
-        const totalDelay = baseDelay + randomDelay;
-        
-        console.log(`Delaying ${totalDelay}ms before sending email ${i + 1}/${emails.length}`);
-        await delay(totalDelay);
+        const waitTime = 2000 + Math.random() * 2000;
+        console.log(`⏳ Waiting ${Math.round(waitTime / 1000)}s before next email...`);
+        await delay(waitTime);
       }
-      
+
       try {
-        // Validate email address first
+        console.log(`\n📤 Processing email ${i + 1}/${emails.length}: ${emailData.email}`);
+
         if (!validateEmail(emailData.email)) {
           throw new Error('Invalid email format');
         }
-        let attachments = [];
+
+        let attachments: any[] = [];
         let jpgBuffer: Buffer | null = null;
-        
-        console.log('Ticket generation check:', {
-          attachTicket,
-          appendTicketInline,
-          hasRegularTemplate: !!regularSvgTemplate,
-          hasVipTemplate: !!vipSvgTemplate,
-          hasQrData: !!emailData.qrData,
-          shouldGenerate: (attachTicket || appendTicketInline) && (regularSvgTemplate || vipSvgTemplate) && emailData.qrData
-        });
 
-        if ((attachTicket || appendTicketInline) && (regularSvgTemplate || vipSvgTemplate) && emailData.qrData) {
-          // Check if this attendee is VIP
-          let isVip = false;
-          if (emailData.rowData) {
-            // Find VIP column (case-insensitive search)
-            const vipColumnKey = Object.keys(emailData.rowData).find(key => 
-              key.toLowerCase() === 'vip'
-            );
-            
-            if (vipColumnKey) {
-              const vipValue = emailData.rowData[vipColumnKey];
-              // Check for VIP values: '1', 'X', 'Yes' (case-insensitive)
-              isVip = vipValue && (
-                vipValue.toString() === '1' || 
-                vipValue.toString().toUpperCase() === 'X' || 
-                vipValue.toString().toLowerCase() === 'yes'
-              );
-            }
-          }
-          
-          // Select appropriate template
-          const svgTemplate = isVip ? vipSvgTemplate : regularSvgTemplate;
-          if (!svgTemplate) {
-            console.error(`Template not found: ${isVip ? 'ticket_vip.svg' : 'ticket.svg'}`);
-            throw new Error('Ticket template not found');
-          }
-          
-          console.log('Ticket template selection:', {
-            email: emailData.email,
-            isVip,
-            template: isVip ? 'ticket_vip.svg' : 'ticket.svg',
-            vipData: emailData.rowData?.VIP || emailData.rowData?.vip
-          });
-          
-          // Generate QR code and ticket
-          const qrSvgContent = await QRCode.toString(emailData.qrData, {
-            type: 'svg',
-            width: 368,
-            margin: 0,
-            color: {
-              dark: '#000000',
-              light: '#FFFFFF'
-            }
-          });
-          
-          const qrCodeElements = qrSvgContent
-            .replace(/<\?xml[^>]*\?>/, '')
-            .replace(/<svg[^>]*>/, '')
-            .replace(/<\/svg>/, '')
-            .trim();
+        // --- XỬ LÝ TICKET JPG ---
+        if ((attachTicket || appendTicketInline) && emailData.qrData) {
+          console.log(`🎫 Generating ticket with QR: ${emailData.qrData.substring(0, 20)}...`);
 
-          const scale = 368 / 29;
-          const qrCodeGroup = `
-            <g transform="translate(1200, 284)">
-              <g transform="scale(${scale})">
-                ${qrCodeElements}
-              </g>
-            </g>
-          `;
+          const ticketResult = await createTicketFromJPG(
+            emailData,
+            attachTicket || false,
+            appendTicketInline || false
+          );
 
-          let ticketSvg = svgTemplate;
-          
-          // For VIP template, handle different QR code placement
-          if (isVip) {
-            // VIP template uses different coordinates: x="1657.38" y="787.36" width="226.72" height="226.72"
-            const vipScale = 226.72 / 29; // Scale factor for VIP QR code
-            const vipQrCodeGroup = `
-              <g transform="translate(1657.38, 787.36)">
-                <g transform="scale(${vipScale})">
-                  ${qrCodeElements}
-                </g>
-              </g>
-            `;
-            ticketSvg = ticketSvg.replace(
-              /<rect[^>]*id="QR-CODE"[^>]*\/>/,
-              vipQrCodeGroup
-            );
-          } else {
-            // Regular template
-            ticketSvg = ticketSvg.replace(
-              /<rect x="1200" y="284" width="368" height="368" stroke="white" stroke-width="0" id="qr-code"\/>/,
-              qrCodeGroup
-            );
-          }
-          
-          // Replace NAME and TITLE in the template
-          if (emailData.rowData) {
-            // Look for NAME column
-            const nameColumnKey = Object.keys(emailData.rowData).find(key => 
-              key.toLowerCase() === 'name' || key.toLowerCase() === 'tên' || key.toLowerCase() === 'họ tên'
-            );
-            if (nameColumnKey) {
-              const name = emailData.rowData[nameColumnKey] || '';
-              if (isVip) {
-                // For VIP template, center the text
-                ticketSvg = ticketSvg.replace(
-                  /(<text[^>]*id="NAME"[^>]*?)([^>]*>)/,
-                  `$1 text-anchor="middle"$2`
-                );
-                ticketSvg = ticketSvg.replace(
-                  /(<text[^>]*id="NAME"[^>]*>[\s\S]*?<tspan[^>]*x=")[^"]*("[\s\S]*?>)[^<]*([\s\S]*?<\/tspan>[\s\S]*?<\/text>)/,
-                  `$1320$2${name}$3`
-                );
-              } else {
-                // For regular template (if it uses placeholders)
-                ticketSvg = ticketSvg.replace(/\{NAME\}/g, name);
-              }
-            }
-            
-            // Look for TITLE column
-            const titleColumnKey = Object.keys(emailData.rowData).find(key => 
-              key.toLowerCase() === 'title' || key.toLowerCase() === 'chức vụ' || key.toLowerCase() === 'position'
-            );
-            if (titleColumnKey) {
-              const title = emailData.rowData[titleColumnKey] || '';
-              if (isVip) {
-                // For VIP template, center the text
-                ticketSvg = ticketSvg.replace(
-                  /(<text[^>]*id="TITLE"[^>]*?)([^>]*>)/,
-                  `$1 text-anchor="middle"$2`
-                );
-                ticketSvg = ticketSvg.replace(
-                  /(<text[^>]*id="TITLE"[^>]*>[\s\S]*?<tspan[^>]*x=")[^"]*("[\s\S]*?>)[^<]*([\s\S]*?<\/tspan>[\s\S]*?<\/text>)/,
-                  `$1320$2${title}$3`
-                );
-              } else {
-                // For regular template (if it uses placeholders)
-                ticketSvg = ticketSvg.replace(/\{TITLE\}/g, title);
-              }
-            }
-          }
+          attachments = ticketResult.attachments;
+          jpgBuffer = ticketResult.jpgBuffer;
 
-          // Convert to JPG
-          jpgBuffer = await sharp(Buffer.from(ticketSvg))
-            .jpeg({ 
-              quality: 75,
-              density: 72,
-              progressive: true
-            })
-            .toBuffer();
-
-          // Create attachment
-          const attachment: any = {
-            filename: `ticket-${emailData.rowNumber}.jpg`,
-            content: jpgBuffer,
-            contentType: 'image/jpeg'
-          };
-          
-          // If appendTicketInline, add CID for inline display
-          if (appendTicketInline) {
-            attachment.cid = `ticket-${emailData.rowNumber}`;
-            attachment.contentDisposition = 'inline';
+          if (!jpgBuffer) {
+            console.warn(`⚠️ Could not generate ticket for ${emailData.email}`);
           }
-          
-          attachments.push(attachment);
-          console.log('Created attachment:', {
-            filename: attachment.filename,
-            hasContent: !!attachment.content,
-            contentLength: attachment.content?.length,
-            cid: attachment.cid,
-            contentDisposition: attachment.contentDisposition
-          });
         }
 
-        // Use template if available, otherwise use provided message
+        // --- SOẠN NỘI DUNG EMAIL ---
         const messageToUse = emailTemplate || message;
-        
-        // Function to replace placeholders with row data
-        const replacePlaceholders = (text: string): string => {
-          let result = text;
-          
-          // Debug logging
-          console.log('Replacing placeholders for email:', emailData.email);
-          console.log('Row data:', emailData.rowData);
-          
-          // Replace ALL column-based placeholders from rowData
+
+        const replacePlaceholders = (text: string) => {
+          let res = text;
           if (emailData.rowData) {
-            Object.keys(emailData.rowData).forEach(columnName => {
-              // Create regex to match {columnName} in any case
-              const placeholder = new RegExp(`\\{${columnName}\\}`, 'gi');
-              const value = emailData.rowData![columnName];
-              console.log(`Replacing {${columnName}} with "${value}"`);
-              result = result.replace(placeholder, value?.toString() || '');
+            Object.keys(emailData.rowData).forEach(k => {
+              const value = emailData.rowData![k];
+              if (value !== null && value !== undefined) {
+                res = res.replace(new RegExp(`\\{${k}\\}`, 'gi'), String(value));
+              }
             });
           }
-          
-          // System placeholders (only replace if not already replaced by column data)
-          result = result
-            .replace(/\{senderName\}/gi, defaultSenderName)
+          return res.replace(/\{senderName\}/gi, defaultSenderName)
             .replace(/\{senderEmail\}/gi, defaultSenderEmail)
             .replace(/\{ticketCode\}/gi, emailData.qrData)
-            .replace(/\{eventDate\}/gi, new Date().toLocaleDateString('vi-VN'))
-            .replace(/\{contactPhone\}/gi, process.env.CONTACT_PHONE || '0123456789');
-            
-          return result;
+            .replace(/\{eventDate\}/gi, new Date().toLocaleDateString('vi-VN'));
         };
-        
-        // Replace placeholders in both message and subject
+
         const personalizedMessage = replacePlaceholders(messageToUse);
         const personalizedSubject = replacePlaceholders(subject);
-        
-        // Prepare HTML content
-        // Always preserve line breaks by converting \n to <br> while keeping existing HTML
+
         let htmlContent = personalizedMessage.replace(/\n/g, '<br>');
-        
-        // If appendTicketInline is true, add the image as inline at the bottom
         if (appendTicketInline && jpgBuffer) {
-          // Add the image inline at the bottom with 100% width
-          htmlContent += `<br><br><img src="cid:ticket-${emailData.rowNumber}" style="width: 100%; max-width: 800px; height: auto; display: block; margin: 0 auto;" alt="Event Ticket" />`;
+          htmlContent += `<br><br><img src="cid:ticket-${emailData.rowNumber}" style="width:100%;max-width:800px;display:block;margin:0 auto;">`;
         }
 
-        const mailOptions = {
-          from: defaultSenderName ? `"${defaultSenderName}" <${defaultSenderEmail}>` : defaultSenderEmail,
+        // --- GỬI MAIL ---
+        console.log(`✉️ Sending email to ${emailData.email}...`);
+        await transporter.sendMail({
+          from: `"${defaultSenderName}" <${defaultSenderEmail}>`,
           to: emailData.email,
           bcc: bccList.length > 0 ? bccList : undefined,
           subject: personalizedSubject,
           text: personalizedMessage,
           html: htmlContent,
           attachments: attachments
-        };
-        
-        console.log('Mail options:', {
-          to: emailData.email,
-          hasAttachments: attachments.length > 0,
-          attachmentCount: attachments.length,
-          htmlContainsImage: htmlContent.includes('<img'),
-          appendTicketInline
         });
 
-        await transporter.sendMail(mailOptions);
         successCount++;
-        console.log(`Email sent successfully to ${emailData.email} (${i + 1}/${emails.length})`);
-        
-        // Track successful email for Google Sheets update
+        console.log(`✅ Sent successfully to: ${emailData.email}`);
         if (emailData.originalRowIndex !== undefined) {
-          console.log(`Tracking row ${emailData.originalRowIndex} for update`);
           successfulEmailRows.push(emailData.originalRowIndex);
-        } else {
-          console.log(`Warning: No originalRowIndex for ${emailData.email}`);
         }
 
-      } catch (emailError) {
+      } catch (emailError: any) {
         failureCount++;
-        const errorMsg = emailError instanceof Error ? emailError.message : String(emailError);
-        const fullErrorMsg = `Failed to send to ${emailData.email}: ${errorMsg}`;
-        errors.push(fullErrorMsg);
-        console.error(fullErrorMsg);
-        
-        // Track failed email for Google Sheets update
+        const errStr = String(emailError.message || emailError);
+        console.error(`❌ Error sending to ${emailData.email}:`, errStr);
+        errors.push(`${emailData.email}: ${errStr}`);
         if (emailData.originalRowIndex !== undefined) {
           failedEmailRows.push({
             rowIndex: emailData.originalRowIndex,
-            error: errorMsg
+            error: errStr.substring(0, 200)
           });
         }
       }
     }
 
-    // Update Google Sheets to mark emails as sent
-    if ((successfulEmailRows.length > 0 || failedEmailRows.length > 0) && spreadsheetId && sheetName) {
+    // --- CẬP NHẬT GOOGLE SHEETS ---
+    if (spreadsheetId && sheetName) {
       try {
-        console.log('Attempting to update Google Sheets:', {
-          spreadsheetId,
-          sheetName,
-          successfulRows: successfulEmailRows,
-          failedRows: failedEmailRows.map(f => f.rowIndex),
-          emailSentColumnName: emailSentColumnName || 'Email Sent'
-        });
-        
         if (successfulEmailRows.length > 0) {
+          console.log(`📊 Updating Google Sheets for ${successfulEmailRows.length} successful emails...`);
           await updateGoogleSheetsEmailStatus(
-            spreadsheetId, 
-            sheetName, 
-            successfulEmailRows, 
+            spreadsheetId,
+            sheetName,
+            successfulEmailRows,
             emailSentColumnName || 'Email Sent'
           );
-          console.log(`Updated ${successfulEmailRows.length} successful email rows in Google Sheets`);
         }
-        
         if (failedEmailRows.length > 0) {
+          console.log(`📊 Updating Google Sheets for ${failedEmailRows.length} failed emails...`);
           await updateGoogleSheetsEmailErrors(
-            spreadsheetId, 
-            sheetName, 
+            spreadsheetId,
+            sheetName,
             failedEmailRows,
             'Email Error'
           );
-          console.log(`Updated ${failedEmailRows.length} failed email rows in Google Sheets`);
         }
-      } catch (updateError) {
-        console.error('Failed to update Google Sheets:', updateError);
-        // Don't fail the entire operation if sheet update fails
+      } catch (sheetsError: any) {
+        console.error('Google Sheets update failed:', sheetsError.message);
       }
     }
 
     return NextResponse.json({
       success: true,
-      message: `Sent ${successCount} emails successfully${failureCount > 0 ? `, ${failureCount} failed` : ''}`,
+      message: `Sent ${successCount} emails, ${failureCount} failed`,
       successCount,
       failureCount,
-      updatedSuccessRows: successfulEmailRows.length,
-      updatedErrorRows: failedEmailRows.length,
-      errors: errors.length > 0 ? errors.slice(0, 5) : undefined // Limit error details
+      errors: errors.slice(0, 5)
     });
 
-  } catch (error) {
-    console.error('Send emails error:', error);
-    return NextResponse.json(
-      { 
-        error: 'Failed to send emails', 
-        details: error instanceof Error ? error.message : String(error) 
-      },
-      { status: 500 }
-    );
+  } catch (error: any) {
+    console.error('API Error:', error);
+    return NextResponse.json({
+      error: 'Internal Server Error',
+      details: String(error.message || error)
+    }, { status: 500 });
   }
 }

@@ -1,4 +1,3 @@
-
 "use client";
 
 import * as React from "react";
@@ -177,6 +176,13 @@ export default function DashboardPage() {
   }, [isContinuous]);
 
   const handleCheckIn = React.useCallback((data: z.infer<typeof checkInSchema>) => {
+    if (isCheckingInRef.current) {
+      console.log('🛑 Check-in in progress, block all scans');
+      return;
+    }
+
+    isCheckingInRef.current = true;
+
     const { uniqueCode } = data;
     if (!uniqueCode) return;
 
@@ -239,42 +245,66 @@ export default function DashboardPage() {
     }
 
     if (foundRowIndex !== -1) {
-      const foundRowData = rows[foundRowIndex];
-      if (foundRowData.checkedInTime) {
-        setScannedRow(foundRowData);
-        setDialogState('duplicate');
-        setIsAlertOpen(true);
-      } else {
+      setRows(prevRows => {
+        const row = prevRows[foundRowIndex];
+
+        const isCheckedIn = Boolean(
+          row["Checked-In At"] || row.checkedInTime
+        );
+
+        // 🚫 DUPLICATE
+        if (isCheckedIn) {
+          setScannedRow(row);
+          setDialogState('duplicate');
+          setIsAlertOpen(true);
+          return prevRows;
+        }
+
+        // ✅ SUCCESS
         const checkInTime = new Date();
-        const updatedRow = { ...foundRowData, checkedInTime: checkInTime, __rowNum__: foundRowData.__rowNum__ };
-        const updatedRows = [...rows];
-        updatedRows[foundRowIndex] = updatedRow;
-        setRows(updatedRows);
+        const checkInDisplay = checkInTime.toLocaleString('vi-VN');
+
+        const updatedRow = {
+          ...row,
+          checkedInTime: checkInTime,
+          ["Checked-In At"]: checkInDisplay,
+        };
+
+        const newRows = [...prevRows];
+        newRows[foundRowIndex] = updatedRow;
+
         setScannedRow(updatedRow);
         setDialogState('success');
         setIsAlertOpen(true);
 
-        // Real-time save to Google Sheets if connected
-        console.log('Google Sheets save check:', {
-          dataSource,
-          isGoogleSheetsConnected,
-          rowNum: foundRowData.__rowNum__,
-          shouldSave: dataSource === 'google-sheets' && isGoogleSheetsConnected && foundRowData.__rowNum__
-        });
+        // Save Google Sheets
+        if (
+          dataSource === 'google-sheets' &&
+          isGoogleSheetsConnected &&
+          row.__rowNum__
+        ) {
+          try {
+            googleSheetsApi.saveCheckIn(row.__rowNum__, checkInTime);
 
-        if (dataSource === 'google-sheets' && isGoogleSheetsConnected && foundRowData.__rowNum__) {
-          console.log('Saving to Google Sheets, row:', foundRowData.__rowNum__);
-          googleSheetsApi.saveCheckIn(foundRowData.__rowNum__, checkInTime).catch(error => {
-            console.error('Failed to save check-in to Google Sheets:', error);
-            // Note: We don't show user error here to avoid disrupting the check-in flow
-          });
+          } catch (err) {
+            console.error(err);
+          } finally {
+            // mở khóa SAU KHI xong toàn bộ
+            setTimeout(() => {
+              isCheckingInRef.current = false;
+            }, 1000); // buffer an toàn
+          }
+
         }
-      }
+
+        return newRows;
+      });
     } else {
       setScannedRow(undefined);
       setDialogState('not_found');
       setIsAlertOpen(true);
     }
+
   }, [rows, headers, isScanning, stopScan, isContinuous]);
 
   const tick = React.useCallback(() => {
@@ -452,12 +482,13 @@ export default function DashboardPage() {
         const row = rows[index];
         return {
           qrData: String(row[qrCodeColumn]),
+          zone: String(row['ZONE']),
           rowNumber: (index + 1).toString().padStart(4, '0')
         };
       });
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+      // const timeoutId = setTimeout(() => controller.abort(), 6000000000); // 60 second timeout
 
       const response = await fetch('/api/generate-tickets-zip-jszip', {
         method: 'POST',
@@ -466,7 +497,7 @@ export default function DashboardPage() {
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
+      // clearTimeout(timeoutId);
 
       if (response.ok) {
         const blob = await response.blob();
@@ -527,6 +558,7 @@ export default function DashboardPage() {
       const row = rows[index];
       const email = row[emailColumn];
       const qrData = row[qrCodeColumn];
+      const zone = row['ZONE'];
 
       if (!email || email.toString().trim() === '') {
         invalidRows.push({ index: index + 1, reason: 'Empty email' });
@@ -696,14 +728,16 @@ export default function DashboardPage() {
     };
   }, [stopScan]);
 
-  React.useEffect(() => {
-    if (isContinuous && dialogState === 'success' && isAlertOpen) {
-      const timer = setTimeout(() => {
-        handleAlertClose();
-      }, 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [isAlertOpen, dialogState, isContinuous, handleAlertClose]);
+  // React.useEffect(() => {
+  //   if (isContinuous && dialogState === 'success' && isAlertOpen) {
+  //     const timer = setTimeout(() => {
+  //       handleAlertClose();
+  //     }, 1500);
+  //     return () => clearTimeout(timer);
+  //   }
+  // }, [isAlertOpen, dialogState, isContinuous, handleAlertClose]);
+
+  const isCheckingInRef = React.useRef(false);
 
   const processSheetData = (wb: WorkBook, sheetName: string) => {
     try {
@@ -833,7 +867,15 @@ export default function DashboardPage() {
         setScannedRow(null);
         setHighlightedRowIndex(null);
         rowRefs.current = [];
-
+        setQrCodeColumn('');
+        setEmailColumn('');
+        setResendConfirmData({ previouslySent: [], totalSelected: 0 });
+        setIsCheckingEmails(false);
+        setIsEmailModalOpen(false);
+        setQrModalOpen(false);
+        setIsScanning(false);
+        setScanError(null);
+        setIsContinuous(false);
 
         if (result.sheets.length === 0) {
           toast({
@@ -1407,10 +1449,6 @@ export default function DashboardPage() {
                 {headers.map((header) => (
                   <p key={header}><strong>{header}:</strong> {String(scannedRow[header] ?? '')}</p>
                 ))}
-                <p>
-                  <strong>Checked-in:</strong>{" "}
-                  <span suppressHydrationWarning>{formatDateSafe(scannedRow.checkedInTime)}</span>
-                </p>
               </div>
             </>
           )}

@@ -61,7 +61,8 @@ export async function POST(request: NextRequest) {
 
     const sheets = google.sheets({ version: 'v4', auth });
 
-    // Read data from sheet
+    // Read data from sheet - use just the sheet name (Google Sheets will get all data)
+    // No need to specify range, just the sheet name
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
       range: sheetName,

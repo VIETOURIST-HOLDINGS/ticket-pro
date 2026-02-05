@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
 
     // Initialize auth
     let auth;
-    
+
     if (process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY) {
       auth = new google.auth.GoogleAuth({
         credentials: {
@@ -29,23 +29,23 @@ export async function POST(request: NextRequest) {
     } else if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       // Try refresh token from env first
       let refreshToken = process.env.GOOGLE_REFRESH_TOKEN;
-      
+
       // If not in env, try cookies
       if (!refreshToken) {
         const cookieStore = cookies();
         refreshToken = cookieStore.get('google_refresh_token')?.value;
       }
-      
+
       if (refreshToken) {
         const oauth2Client = new google.auth.OAuth2(
           process.env.GOOGLE_CLIENT_ID,
           process.env.GOOGLE_CLIENT_SECRET
         );
-        
+
         oauth2Client.setCredentials({
           refresh_token: refreshToken,
         });
-        
+
         auth = oauth2Client;
       } else {
         return NextResponse.json(
@@ -70,11 +70,11 @@ export async function POST(request: NextRequest) {
 
     const headers = headerResponse.data.values?.[0] || [];
     console.log('Headers found:', headers);
-    
-    let checkInColumnIndex = headers.findIndex((h: string) => 
+
+    let checkInColumnIndex = headers.findIndex((h: string) =>
       h.toLowerCase().includes('check') && h.toLowerCase().includes('in')
     );
-    
+
     console.log('Check-in column index:', checkInColumnIndex);
 
     // Helper function to convert column index to letter(s) (0=A, 25=Z, 26=AA, etc.)
@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
     if (checkInColumnIndex === -1) {
       checkInColumnIndex = headers.length;
       const columnLetter = getColumnLetter(checkInColumnIndex);
-      
+
       await sheets.spreadsheets.values.update({
         spreadsheetId,
         range: `${sheetName}!${columnLetter}1`,
@@ -105,7 +105,7 @@ export async function POST(request: NextRequest) {
     // Update the specific cell with check-in time
     const columnLetter = getColumnLetter(checkInColumnIndex);
     const cellRange = `${sheetName}!${columnLetter}${rowNumber}`;
-    
+
     const checkInDateTime = new Date(checkInTime).toLocaleString('vi-VN', {
       year: 'numeric',
       month: '2-digit',
@@ -125,8 +125,8 @@ export async function POST(request: NextRequest) {
     });
 
     console.log(`✅ Check-in saved: ${cellRange} = ${checkInDateTime}`);
-    
-    return NextResponse.json({ 
+
+    return NextResponse.json({
       success: true,
       message: `Check-in saved for row ${rowNumber}`,
       details: {
@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error('Google Sheets check-in error:', error);
-    
+
     // More detailed error logging
     if (error.response) {
       console.error('Error response:', {
@@ -146,7 +146,7 @@ export async function POST(request: NextRequest) {
         data: error.response.data
       });
     }
-    
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Failed to save check-in' },
       { status: 500 }
