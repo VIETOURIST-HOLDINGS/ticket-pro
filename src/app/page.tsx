@@ -174,138 +174,287 @@ export default function DashboardPage() {
       }
     }
   }, [isContinuous]);
+  const lastScannedCodeRef = React.useRef<string | null>(null);
 
-  const handleCheckIn = React.useCallback((data: z.infer<typeof checkInSchema>) => {
-    if (isCheckingInRef.current) {
-      console.log('🛑 Check-in in progress, block all scans');
-      return;
-    }
 
-    isCheckingInRef.current = true;
+  const handleCheckIn = React.useCallback(
+    async (data: z.infer<typeof checkInSchema>) => {
 
-    const { uniqueCode } = data;
-    if (!uniqueCode) return;
+      const rawCode = data?.uniqueCode?.trim();
+      if (!rawCode) return;
 
-    // Chỉ dừng camera khi không phải continuous mode
-    if (scanSourceRef.current === 'camera' && isScanning && !isContinuous) {
-      stopScan();
-    }
+      if (isCheckingInRef.current) return;
+      if (lastScannedCodeRef.current === rawCode) return;
 
-    let codeToSearch = uniqueCode.trim();
-    try {
-      const url = new URL(codeToSearch);
-      const params = url.searchParams;
-      const codeParam = params.get("code") || params.get("id");
-      if (codeParam) {
-        codeToSearch = codeParam.trim();
-      } else {
-        const firstParam = params.values().next().value;
-        if (firstParam) codeToSearch = firstParam.trim();
-      }
-    } catch (e) { /* Not a valid URL, use codeToSearch as is */ }
+      isCheckingInRef.current = true;
+      lastScannedCodeRef.current = rawCode;
 
-    let foundRowIndex = -1;
+      try {
 
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      for (const header of headers) {
-        const cellValue = row[header];
-        if (cellValue === undefined || cellValue === null) continue;
+        if (scanSourceRef.current === 'camera' && isScanning && !isContinuous) {
+          stopScan();
+        }
 
-        let cellCode = String(cellValue).trim();
-        try {
-          const url = new URL(cellCode);
-          const params = url.searchParams;
-          const codeParam = params.get("code") || params.get("id");
-          if (codeParam) {
-            cellCode = codeParam.trim();
-          } else {
-            const firstParam = params.values().next().value;
-            if (firstParam) cellCode = firstParam.trim();
+        const extractCode = (value: string) => {
+          try {
+            const url = new URL(value);
+            const params = url.searchParams;
+            return (
+              params.get("code") ||
+              params.get("id") ||
+              params.values().next().value ||
+              value
+            )?.trim();
+          } catch {
+            return value.trim();
           }
-        } catch (e) { /* not a url */ }
+        };
 
-        if (codeToSearch.toLowerCase() === cellCode.toLowerCase()) {
-          foundRowIndex = i;
-          break;
+        const codeToSearch = extractCode(rawCode).toLowerCase();
+
+        let foundIndex = -1;
+
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+
+          for (const header of headers) {
+            const cellValue = row[header];
+            if (!cellValue) continue;
+
+            const cellCode = extractCode(String(cellValue)).toLowerCase();
+
+            if (cellCode === codeToSearch) {
+              foundIndex = i;
+              break;
+            }
+          }
+
+          if (foundIndex !== -1) break;
         }
-      }
-      if (foundRowIndex !== -1) break;
-    }
 
-    setHighlightedRowIndex(foundRowIndex !== -1 ? foundRowIndex : null);
-    if (foundRowIndex !== -1) {
-      const rowElement = rowRefs.current[foundRowIndex];
-      if (rowElement) {
-        rowElement.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center'
-        });
-      }
-    }
-
-    if (foundRowIndex !== -1) {
-      setRows(prevRows => {
-        const row = prevRows[foundRowIndex];
-
-        const isCheckedIn = Boolean(
-          row["Checked-In At"] || row.checkedInTime
-        );
-
-        // 🚫 DUPLICATE
-        if (isCheckedIn) {
-          setScannedRow(row);
-          setDialogState('duplicate');
+        if (foundIndex === -1) {
+          setScannedRow(undefined);
+          setDialogState('not_found');
           setIsAlertOpen(true);
-          return prevRows;
+          return;
         }
 
-        // ✅ SUCCESS
         const checkInTime = new Date();
         const checkInDisplay = checkInTime.toLocaleString('vi-VN');
 
-        const updatedRow = {
-          ...row,
-          checkedInTime: checkInTime,
-          ["Checked-In At"]: checkInDisplay,
-        };
+        // 🔥 QUAN TRỌNG: kiểm tra duplicate bên trong setRows
+        setRows(prevRows => {
 
-        const newRows = [...prevRows];
-        newRows[foundRowIndex] = updatedRow;
+          const row = prevRows[foundIndex];
 
-        setScannedRow(updatedRow);
-        setDialogState('success');
-        setIsAlertOpen(true);
+          // 🔴 DUPLICATE
+          if (row["Checked-In At"] || row.checkedInTime) {
+            setScannedRow(row);
+            setDialogState('duplicate');
+            setIsAlertOpen(true);
+            return prevRows;
+          }
 
-        // Save Google Sheets
+          // ✅ SUCCESS
+          const updatedRow = {
+            ...row,
+            checkedInTime: checkInTime,
+            ["Checked-In At"]: checkInDisplay,
+          };
+
+          const newRows = [...prevRows];
+          newRows[foundIndex] = updatedRow;
+
+          setScannedRow(updatedRow);
+          setDialogState('success');
+          setIsAlertOpen(true);
+          setHighlightedRowIndex(foundIndex);
+
+          const rowElement = rowRefs.current[foundIndex];
+          rowElement?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center'
+          });
+
+          return newRows;
+        });
+
+        // ☁️ Save Google Sheets (dùng rowNum từ rows hiện tại vẫn OK)
+        const rowForSheet = rows[foundIndex];
+
         if (
           dataSource === 'google-sheets' &&
           isGoogleSheetsConnected &&
-          row.__rowNum__
+          rowForSheet?.__rowNum__
         ) {
           try {
-            googleSheetsApi.saveCheckIn(row.__rowNum__, checkInTime);
-
+            await googleSheetsApi.saveCheckIn(
+              rowForSheet.__rowNum__,
+              checkInTime
+            );
           } catch (err) {
-            console.error(err);
-          } finally {
-            // mở khóa SAU KHI xong toàn bộ
-            setTimeout(() => {
-              isCheckingInRef.current = false;
-            }, 1000); // buffer an toàn
+            console.error("Google Sheets error:", err);
           }
-
         }
 
-        return newRows;
-      });
-    } else {
-      setScannedRow(undefined);
-      setDialogState('not_found');
-      setIsAlertOpen(true);
-    }
+      } catch (err) {
+        console.error("Check-in error:", err);
+      } finally {
 
-  }, [rows, headers, isScanning, stopScan, isContinuous]);
+        // Unlock nhanh để cho quét mã khác
+        setTimeout(() => {
+          isCheckingInRef.current = false;
+        }, 400);
+
+        // Nhưng giữ mã cũ 3 giây để không quét lại chính nó
+        setTimeout(() => {
+          lastScannedCodeRef.current = null;
+        }, 3000);
+
+      }
+
+    },
+    [
+      rows,
+      headers,
+      isScanning,
+      isContinuous,
+      stopScan,
+      dataSource,
+      isGoogleSheetsConnected
+    ]
+  );
+  // const handleCheckIn = React.useCallback((data: z.infer<typeof checkInSchema>) => {
+  //   if (isCheckingInRef.current) {
+  //     console.log('🛑  , block all scans');
+  //     return;
+  //   }
+
+  //   isCheckingInRef.current = true;
+
+  //   const { uniqueCode } = data;
+  //   if (!uniqueCode) return;
+
+  //   // Chỉ dừng camera khi không phải continuous mode
+  //   if (scanSourceRef.current === 'camera' && isScanning && !isContinuous) {
+  //     stopScan();
+  //   }
+
+  //   let codeToSearch = uniqueCode.trim();
+  //   try {
+  //     const url = new URL(codeToSearch);
+  //     const params = url.searchParams;
+  //     const codeParam = params.get("code") || params.get("id");
+  //     if (codeParam) {
+  //       codeToSearch = codeParam.trim();
+  //     } else {
+  //       const firstParam = params.values().next().value;
+  //       if (firstParam) codeToSearch = firstParam.trim();
+  //     }
+  //   } catch (e) { /* Not a valid URL, use codeToSearch as is */ }
+
+  //   let foundRowIndex = -1;
+
+  //   for (let i = 0; i < rows.length; i++) {
+  //     const row = rows[i];
+  //     for (const header of headers) {
+  //       const cellValue = row[header];
+  //       if (cellValue === undefined || cellValue === null) continue;
+
+  //       let cellCode = String(cellValue).trim();
+  //       try {
+  //         const url = new URL(cellCode);
+  //         const params = url.searchParams;
+  //         const codeParam = params.get("code") || params.get("id");
+  //         if (codeParam) {
+  //           cellCode = codeParam.trim();
+  //         } else {
+  //           const firstParam = params.values().next().value;
+  //           if (firstParam) cellCode = firstParam.trim();
+  //         }
+  //       } catch (e) { /* not a url */ }
+
+  //       if (codeToSearch.toLowerCase() === cellCode.toLowerCase()) {
+  //         foundRowIndex = i;
+  //         break;
+  //       }
+  //     }
+  //     if (foundRowIndex !== -1) break;
+  //   }
+
+  //   setHighlightedRowIndex(foundRowIndex !== -1 ? foundRowIndex : null);
+  //   if (foundRowIndex !== -1) {
+  //     const rowElement = rowRefs.current[foundRowIndex];
+  //     if (rowElement) {
+  //       rowElement.scrollIntoView({
+  //         behavior: 'smooth',
+  //         block: 'center'
+  //       });
+  //     }
+  //   }
+
+  //   if (foundRowIndex !== -1) {
+  //     setRows(prevRows => {
+  //       const row = prevRows[foundRowIndex];
+
+  //       const isCheckedIn = Boolean(
+  //         row["Checked-In At"] || row.checkedInTime
+  //       );
+
+  //       // 🚫 DUPLICATE
+  //       if (isCheckedIn) {
+  //         setScannedRow(row);
+  //         setDialogState('duplicate');
+  //         setIsAlertOpen(true);
+  //         return prevRows;
+  //       }
+
+  //       // ✅ SUCCESS
+  //       const checkInTime = new Date();
+  //       const checkInDisplay = checkInTime.toLocaleString('vi-VN');
+
+  //       const updatedRow = {
+  //         ...row,
+  //         checkedInTime: checkInTime,
+  //         ["Checked-In At"]: checkInDisplay,
+  //       };
+
+  //       const newRows = [...prevRows];
+  //       newRows[foundRowIndex] = updatedRow;
+
+  //       setScannedRow(updatedRow);
+  //       setDialogState('success');
+  //       setIsAlertOpen(true);
+
+  //       // Save Google Sheets
+  //       if (
+  //         dataSource === 'google-sheets' &&
+  //         isGoogleSheetsConnected &&
+  //         row.__rowNum__
+  //       ) {
+  //         try {
+  //           googleSheetsApi.saveCheckIn(row.__rowNum__, checkInTime);
+
+  //         } catch (err) {
+  //           console.error(err);
+  //         } finally {
+  //           // mở khóa SAU KHI xong toàn bộ
+  //           setTimeout(() => {
+  //             isCheckingInRef.current = false;
+  //           }, 1000); // buffer an toàn
+  //         }
+
+  //       }
+
+  //       return newRows;
+  //     });
+  //   } else {
+  //     setScannedRow(undefined);
+  //     setDialogState('not_found');
+  //     setIsAlertOpen(true);
+  //   }
+
+  // }, [rows, headers, isScanning, stopScan, isContinuous]);
 
   const tick = React.useCallback(() => {
     if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA && canvasRef.current) {
